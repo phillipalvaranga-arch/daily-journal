@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>My Daily Journal</title>
+  <meta name="description" content="A daily to-do journal. Cross off what you finish, and see your achievements and growth. Everything stays on this device.">
+  <meta name="theme-color" content="#1f4d38">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Daily Journal">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/favicon.png" type="image/png">
+  <link rel="icon" href="icon.ico" sizes="any">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    try {
+      var t = localStorage.getItem("dj-theme");
+      if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+      else if (matchMedia("(prefers-color-scheme: dark)").matches) document.documentElement.dataset.theme = "dark";
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" width="44" height="44">
+      <div>
+        <h1>My Daily Journal</h1>
+        <p id="headerSub" class="sub">Today in Central Time</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button type="button" id="themeBtn" class="btn ghost" aria-pressed="false">Dark mode</button>
+    </div>
+  </header>
+
+  <div id="demoBanner" class="demo-banner" hidden>
+    Sample data for preview — the live app starts with an empty journal.
+  </div>
+
+  <main id="main" tabindex="-1">
+    <!-- TODAY -->
+    <section id="view-today" class="view" data-view="today">
+      <div class="date-nav">
+        <button type="button" class="icon-btn" id="prevDayBtn" aria-label="Previous day">‹</button>
+        <div class="date-display">
+          <h2 id="todayTitle">Today</h2>
+          <p id="todayDate" class="date-line"></p>
+        </div>
+        <button type="button" class="icon-btn" id="nextDayBtn" aria-label="Next day">›</button>
+      </div>
+      <p class="jump-row"><button type="button" id="jumpTodayBtn" class="linkish" hidden>Back to today</button></p>
+
+      <div id="dailyStrip" class="stat-strip" aria-live="polite"></div>
+
+      <form id="addForm" class="add-card" autocomplete="off">
+        <label class="sr" for="taskInput">Add a task</label>
+        <div class="add-row">
+          <input id="taskInput" type="text" maxlength="200" placeholder="Add a task" enterkeyhint="done" required>
+          <button type="submit" id="addBtn" class="btn primary">Add</button>
+        </div>
+        <div class="add-opts">
+          <label>
+            <span>Category</span>
+            <select id="taskCategory"></select>
+          </label>
+          <label>
+            <span>Priority</span>
+            <select id="taskPriority">
+              <option value="">None</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <label>
+            <span>Time</span>
+            <input id="taskTime" type="time">
+          </label>
+        </div>
+      </form>
+
+      <div id="suggestions" class="card suggest-card" hidden>
+        <h3>Start with a repeating task?</h3>
+        <p>These are only suggestions. Nothing is added until you tap one.</p>
+        <div id="suggestList" class="suggest-list"></div>
+        <button type="button" id="dismissSuggestBtn" class="btn ghost">No thanks</button>
+      </div>
+
+      <div id="taskLists"></div>
+    </section>
+
+    <!-- JOURNAL -->
+    <section id="view-journal" class="view" data-view="journal" hidden>
+      <div class="date-nav">
+        <button type="button" class="icon-btn" id="jPrevDayBtn" aria-label="Previous day">‹</button>
+        <div class="date-display">
+          <h2 id="journalTitle">Journal</h2>
+          <p id="journalDate" class="date-line"></p>
+        </div>
+        <button type="button" class="icon-btn" id="jNextDayBtn" aria-label="Next day">›</button>
+      </div>
+      <p class="jump-row"><button type="button" id="jJumpTodayBtn" class="linkish" hidden>Back to today</button></p>
+
+      <div class="card pickers">
+        <fieldset>
+          <legend>Mood</legend>
+          <div id="moodPicker" class="pill-row" role="radiogroup" aria-label="Mood"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Energy</legend>
+          <div id="energyPicker" class="pill-row" role="radiogroup" aria-label="Energy"></div>
+        </fieldset>
+      </div>
+
+      <form id="journalForm" class="journal-form" autocomplete="off">
+        <label class="card field">
+          <span>Notes</span>
+          <textarea id="jNotes" rows="4" maxlength="4000" placeholder="How did the day go?"></textarea>
+        </label>
+        <label class="card field">
+          <span>Wins today</span>
+          <textarea id="jWins" rows="3" maxlength="2000" placeholder="What went well?"></textarea>
+        </label>
+        <label class="card field">
+          <span>Grateful for</span>
+          <textarea id="jGrateful" rows="3" maxlength="2000" placeholder="What are you thankful for?"></textarea>
+        </label>
+        <label class="card field">
+          <span>Tomorrow's focus</span>
+          <textarea id="jTomorrow" rows="3" maxlength="2000" placeholder="What matters tomorrow?"></textarea>
+        </label>
+        <p id="journalSaved" class="saved-line" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <!-- PROGRESS -->
+    <section id="view-progress" class="view" data-view="progress" hidden>
+      <h2 class="view-h">Achievements &amp; growth</h2>
+      <div class="subnav" role="tablist" aria-label="Progress views">
+        <button type="button" class="chip on" role="tab" aria-selected="true" data-progress="daily">Daily</button>
+        <button type="button" class="chip" role="tab" aria-selected="false" data-progress="weekly">Weekly</button>
+        <button type="button" class="chip" role="tab" aria-selected="false" data-progress="monthly">Monthly</button>
+        <button type="button" class="chip" role="tab" aria-selected="false" data-progress="growth">Growth</button>
+      </div>
+      <div id="progressBody"></div>
+      <div id="badgeBoard" class="card badges"></div>
+    </section>
+
+    <!-- MORE -->
+    <section id="view-more" class="view" data-view="more" hidden>
+      <h2 class="view-h">More</h2>
+
+      <div class="card">
+        <h3>Repeating tasks</h3>
+        <p class="hint">These are added automatically on the days you choose. You can pause or change them at any time.</p>
+        <div id="recurringList"></div>
+        <button type="button" id="addRecurringBtn" class="btn">Add a repeating task</button>
+      </div>
+
+      <div class="card">
+        <h3>Categories</h3>
+        <p class="hint">Tap a name to rename it. These are only labels to organize your tasks.</p>
+        <div id="categoryList"></div>
+        <form id="addCatForm" class="inline-form" autocomplete="off">
+          <label class="sr" for="newCatName">New category</label>
+          <input id="newCatName" type="text" maxlength="40" placeholder="New category name" required>
+          <button type="submit" class="btn">Add</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>Backup</h3>
+        <p class="hint">Your journal stays on this device only. Save a backup file, or bring one in from another device.</p>
+        <div class="btn-row">
+          <button type="button" id="exportBtn" class="btn">Export backup</button>
+          <button type="button" id="importBtn" class="btn">Import backup</button>
+          <input id="importFile" type="file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Print a week</h3>
+        <p class="hint">Opens a printable page of the selected week, which you can also save as a PDF from your browser's print dialog.</p>
+        <button type="button" id="printBtn" class="btn">Print this week</button>
+      </div>
+
+      <div class="card">
+        <h3>Appearance</h3>
+        <div class="pill-row" id="themeRow">
+          <button type="button" class="pill" data-theme-set="light">Light</button>
+          <button type="button" class="pill" data-theme-set="dark">Dark</button>
+          <button type="button" class="pill" data-theme-set="system">Match device</button>
+        </div>
+      </div>
+
+      <div class="card about">
+        <h3>About</h3>
+        <p>My Daily Journal keeps your tasks, notes and stats on this device. There is no account, and nothing is sent to a server. Dates and times use Central Time. Achievements and growth figures are computed only from the tasks you enter.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Main">
+    <button type="button" class="tab on" data-view="today">
+      <span class="tab-ic" aria-hidden="true">✓</span>
+      Today
+    </button>
+    <button type="button" class="tab" data-view="journal">
+      <span class="tab-ic" aria-hidden="true">✎</span>
+      Journal
+    </button>
+    <button type="button" class="tab" data-view="progress">
+      <span class="tab-ic" aria-hidden="true">↗</span>
+      Progress
+    </button>
+    <button type="button" class="tab" data-view="more">
+      <span class="tab-ic" aria-hidden="true">☰</span>
+      More
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <h2 id="modalTitle">Edit task</h2>
+      <div id="modalBody"></div>
+      <div id="modalActions" class="btn-row"></div>
+    </div>
+  </div>
+
+  <div id="printArea" class="print-area" hidden></div>
+
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js');
+      });
+    }
+  </script>
+</body>
+</html>
