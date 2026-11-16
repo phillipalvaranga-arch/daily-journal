@@ -1,9 +1,10 @@
-const C = 'journal-v1';
+const C = 'journal-v2';
 const F = [
   './',
   'index.html',
   'style.css',
   'app.js',
+  'sync.js',
   'manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',

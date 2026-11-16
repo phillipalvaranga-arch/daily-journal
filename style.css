@@ -659,6 +659,34 @@ html[data-theme="dark"] .toast { background: #e8efe9; color: #121916; }
 .print-area h1 { font-family: var(--display); }
 .print-meta { color: var(--muted); }
 
+
+/* Sync */
+.steps {
+  margin: 12px 0 16px;
+  padding-left: 1.3em;
+}
+.steps li { margin: 0 0 10px; }
+.steps a { color: var(--accent-2); word-break: break-word; }
+html[data-theme="dark"] .steps a { color: var(--accent); }
+.sync-status {
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin: 0 0 6px;
+}
+.sync-status.ok { color: var(--check); }
+.sync-status.warn { color: var(--high); }
+.sync-status.err { color: var(--danger); }
+.sync-error { color: var(--danger); min-height: 1.2em; margin: 8px 0 0; }
+#syncConnectForm label { display: block; margin: 12px 0; }
+#syncConnectForm label > span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+#syncSetupCard[hidden], #syncConnectedActions[hidden] { display: none; }
 @media (max-width: 560px) {
   .add-opts { grid-template-columns: 1fr 1fr; }
   .add-opts label:last-child { grid-column: 1 / -1; }

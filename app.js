@@ -5,7 +5,7 @@
   const TZ = "America/Chicago";
   const STORE = "daily-journal-v1";
   const THEME_KEY = "dj-theme";
-  const VIEWS = ["today", "journal", "progress", "more"];
+  const VIEWS = ["today", "journal", "progress", "more", "sync"];
 
   const DEFAULT_CATEGORIES = [
     { id: "work", name: "Work / Trading", color: "#2f5d93" },
@@ -134,6 +134,8 @@
       skipped: {},
       badgesEarned: {},
       settings: { suggestionsDismissed: false },
+      settingsTimes: {},
+      tombstones: { tasks: {}, recurring: {}, categories: {}, journal: {}, skipped: {} },
       demo: false
     };
   }
@@ -163,9 +165,41 @@
       if (!state.skipped || typeof state.skipped !== "object") state.skipped = {};
       if (!state.badgesEarned || typeof state.badgesEarned !== "object") state.badgesEarned = {};
       if (!state.settings) state.settings = { suggestionsDismissed: false };
+      migrateState();
     } catch (err) {
       state = defaultState();
+      migrateState();
     }
+  }
+
+  function migrateState() {
+    if (!state.tombstones) state.tombstones = JournalSync.emptyTombs();
+    ["tasks", "recurring", "categories", "journal", "skipped"].forEach(function (k) {
+      if (!state.tombstones[k]) state.tombstones[k] = {};
+    });
+    if (!state.settingsTimes) state.settingsTimes = {};
+    if (!state.settings) state.settings = { suggestionsDismissed: false };
+    (state.tasks || []).forEach(function (item) {
+      if (item && !item.updatedAt) item.updatedAt = item.createdAt || item.doneAt || "";
+    });
+    (state.recurring || []).forEach(function (item) {
+      if (item && !item.updatedAt) item.updatedAt = item.createdAt || "";
+    });
+    (state.categories || []).forEach(function (item) {
+      if (item && !item.updatedAt) item.updatedAt = "";
+    });
+    Object.keys(state.journal || {}).forEach(function (d) {
+      var e = state.journal[d];
+      if (e && !e.updatedAt) e.updatedAt = "";
+      if (e && !e.fieldTimes) e.fieldTimes = {};
+    });
+    Object.keys(state.skipped || {}).forEach(function (rid) {
+      Object.keys(state.skipped[rid] || {}).forEach(function (day) {
+        var e = state.skipped[rid][day];
+        if (e === true) state.skipped[rid][day] = { value: true, updatedAt: "" };
+      });
+    });
+    state.version = 2;
   }
 
   function save() {
@@ -176,9 +210,26 @@
     }
   }
 
-  function persist() {
+  function persist(opts) {
+    opts = opts || {};
     updateBadges();
     save();
+    if (!opts.skipPush) schedulePush();
+  }
+
+  function touch(obj) {
+    if (obj && typeof obj === "object") obj.updatedAt = nowStamp();
+    return obj;
+  }
+
+  function addTomb(kind, id) {
+    if (!state.tombstones) state.tombstones = JournalSync.emptyTombs();
+    if (!state.tombstones[kind]) state.tombstones[kind] = {};
+    state.tombstones[kind][id] = nowStamp();
+  }
+
+  function clearTomb(kind, id) {
+    if (state.tombstones && state.tombstones[kind]) delete state.tombstones[kind][id];
   }
 
   function categoryById(id) {
@@ -206,7 +257,10 @@
   }
 
   function isSkipped(rid, iso) {
-    return !!(state.skipped[rid] && state.skipped[rid][iso]);
+    var e = state.skipped[rid] && state.skipped[rid][iso];
+    if (!e) return false;
+    if (e === true) return true;
+    return !!e.value;
   }
 
   function ensureInstancesForDate(iso) {
@@ -229,7 +283,8 @@
         doneAt: null,
         order: nextOrder(iso),
         recurringId: rule.id,
-        createdAt: nowStamp()
+        createdAt: nowStamp(),
+        updatedAt: nowStamp()
       });
       added = true;
     });
@@ -460,7 +515,8 @@
       doneAt: null,
       order: nextOrder(date),
       recurringId: fields.recurringId || null,
-      createdAt: nowStamp()
+      createdAt: nowStamp(),
+      updatedAt: nowStamp()
     };
     state.tasks.push(task);
     persist();
@@ -476,6 +532,7 @@
     if (!t) return;
     t.done = !t.done;
     t.doneAt = t.done ? nowStamp() : null;
+    touch(t);
     persist();
   }
 
@@ -483,6 +540,7 @@
     const t = getTask(id);
     if (!t) return;
     Object.keys(patch).forEach(function (k) { t[k] = patch[k]; });
+    touch(t);
     persist();
   }
 
@@ -491,16 +549,20 @@
     if (idx === -1) return;
     const t = state.tasks[idx];
     state.tasks.splice(idx, 1);
+    addTomb("tasks", t.id);
     if (skipRecurring && t.recurringId) {
       if (!state.skipped[t.recurringId]) state.skipped[t.recurringId] = {};
-      state.skipped[t.recurringId][t.date] = true;
+      state.skipped[t.recurringId][t.date] = { value: true, updatedAt: nowStamp() };
     }
     persist();
     undo = { type: "task", task: t, skipped: skipRecurring };
     toast("Task deleted.", function () {
+      clearTomb("tasks", t.id);
+      touch(t);
       state.tasks.push(t);
-      if (skipRecurring && t.recurringId && state.skipped[t.recurringId]) {
-        delete state.skipped[t.recurringId][t.date];
+      if (skipRecurring && t.recurringId) {
+        if (!state.skipped[t.recurringId]) state.skipped[t.recurringId] = {};
+        state.skipped[t.recurringId][t.date] = { value: false, updatedAt: nowStamp() };
       }
       persist();
       undo = null;
@@ -514,6 +576,7 @@
     const next = addDays(t.date, 1);
     t.date = next;
     t.order = nextOrder(next);
+    touch(t);
     persist();
     toast("Moved to " + dateLabel(next) + ".");
   }
@@ -521,7 +584,10 @@
   function reorderOpen(iso, ids) {
     ids.forEach(function (id, i) {
       const t = getTask(id);
-      if (t && t.date === iso && !t.done) t.order = i + 1;
+      if (t && t.date === iso && !t.done) {
+        t.order = i + 1;
+        touch(t);
+      }
     });
     persist();
   }
@@ -538,7 +604,8 @@
       monthDay: s.monthDay || null,
       enabled: true,
       startDate: todayISO(),
-      createdAt: nowStamp()
+      createdAt: nowStamp(),
+      updatedAt: nowStamp()
     };
     state.recurring.push(rule);
     persist();
@@ -554,6 +621,10 @@
   }
   function setJournal(iso, patch) {
     const cur = Object.assign({}, getJournal(iso), patch);
+    if (!cur.fieldTimes) cur.fieldTimes = {};
+    const now = nowStamp();
+    Object.keys(patch).forEach(function (k) { cur.fieldTimes[k] = now; });
+    cur.updatedAt = now;
     state.journal[iso] = cur;
     persist();
   }
@@ -1143,6 +1214,7 @@
   }
 
   function renderMore() {
+    renderSyncSummary();
     const list = document.getElementById("recurringList");
     if (!state.recurring.length) {
       list.innerHTML = "<p class='hint'>You have no repeating tasks yet.</p>";
@@ -1164,6 +1236,7 @@
           const r = state.recurring.find(function (x) { return x.id === b.closest(".rec-item").getAttribute("data-rid"); });
           if (!r) return;
           r.enabled = r.enabled === false;
+          touch(r);
           persist();
           if (r.enabled) ensureInstancesForDate(todayISO());
           renderMore();
@@ -1184,6 +1257,7 @@
         const name = inp.value.trim();
         if (!c || !name) { renderMore(); return; }
         c.name = name;
+        touch(c);
         persist();
         fillCategorySelect();
       });
@@ -1195,6 +1269,7 @@
           state.recurring.some(function (r) { return r.categoryId === id; });
         if (used && !confirm("This category is used on some tasks. Remove it anyway? Those tasks will show as uncategorized.")) return;
         state.categories = state.categories.filter(function (c) { return c.id !== id; });
+        addTomb("categories", id);
         persist();
         fillCategorySelect();
         renderMore();
@@ -1254,7 +1329,8 @@
             monthDay: Number(document.getElementById("rcMonthDay").value || 1),
             enabled: r ? r.enabled : true,
             startDate: r ? r.startDate : todayISO(),
-            createdAt: r ? r.createdAt : nowStamp()
+            createdAt: r ? r.createdAt : nowStamp(),
+            updatedAt: nowStamp()
           };
           if (r) Object.assign(r, payload);
           else { payload.id = uid(); state.recurring.push(payload); }
@@ -1267,6 +1343,7 @@
         r ? { label: "Delete", cls: "danger", onClick: function () {
           if (!confirm("Delete this repeating task? Existing items already on your lists will stay.")) return;
           state.recurring = state.recurring.filter(function (x) { return x.id !== r.id; });
+          addTomb("recurring", r.id);
           persist();
           closeModal();
           render();
@@ -1281,12 +1358,247 @@
     typeSel.addEventListener("change", sync);
   }
 
+
+  let pushTimer = 0;
+  let pullTimer = 0;
+  let syncing = false;
+  let dirty = false;
+  let syncStatus = "idle";
+  let syncError = "";
+
+  function formatStampCentral(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString("en-US", {
+      timeZone: TZ,
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }) + " Central";
+  }
+
+  function schedulePush() {
+    if (!JournalSync.getToken()) return;
+    dirty = true;
+    renderSyncStatus();
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(function () { runSync("auto"); }, 3000);
+  }
+
+  function schedulePull(reason) {
+    if (!JournalSync.getToken()) return;
+    clearTimeout(pullTimer);
+    pullTimer = setTimeout(function () { runSync(reason || "focus"); }, 400);
+  }
+
+  function applyMergedState(merged) {
+    const demo = !!state.demo;
+    state.categories = merged.categories;
+    state.tasks = merged.tasks;
+    state.recurring = merged.recurring;
+    state.journal = merged.journal;
+    state.skipped = merged.skipped;
+    state.badgesEarned = merged.badgesEarned;
+    state.settings = merged.settings;
+    state.settingsTimes = merged.settingsTimes;
+    state.tombstones = merged.tombstones;
+    state.version = 2;
+    state.demo = demo;
+  }
+
+  function runSync(reason) {
+    const token = JournalSync.getToken();
+    if (!token) return Promise.resolve();
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      syncStatus = "offline";
+      dirty = true;
+      renderSyncStatus();
+      return Promise.resolve();
+    }
+    if (syncing) {
+      dirty = true;
+      return Promise.resolve();
+    }
+    syncing = true;
+    syncStatus = reason === "connect" ? "connecting" : "syncing";
+    syncError = "";
+    renderSyncStatus();
+
+    const afterError = function (err) {
+      syncStatus = "error";
+      syncError = (err && err.message) ? String(err.message) : "Sync could not be completed.";
+    };
+
+    return Promise.resolve()
+      .then(function () {
+        const knownId = JournalSync.getGistId();
+        if (!knownId) return null;
+        return JournalSync.getGist(token, knownId).then(function (gist) {
+          return { gist: gist, remote: JournalSync.readGistData(gist) };
+        }).catch(function () {
+          JournalSync.setGistId("");
+          return null;
+        });
+      })
+      .then(function (found) {
+        if (found) return found;
+        return JournalSync.findExistingGist(token).then(function (g) {
+          if (!g) return null;
+          JournalSync.setGistId(g.id);
+          return JournalSync.getGist(token, g.id).then(function (gist) {
+            return { gist: gist, remote: JournalSync.readGistData(gist) };
+          });
+        });
+      })
+      .then(function (found) {
+        if (found && found.remote) {
+          const merged = JournalSync.mergeStates(state, found.remote);
+          applyMergedState(merged);
+          persist({ skipPush: true });
+          ensureInstancesForDate(todayISO());
+          if (viewDate !== todayISO()) ensureInstancesForDate(viewDate);
+          render();
+        }
+        const content = JSON.stringify(JournalSync.syncPayload(state), null, 2);
+        if (!JournalSync.getGistId()) {
+          return JournalSync.createGist(token, content).then(function (created) {
+            if (created && created.id) JournalSync.setGistId(created.id);
+          });
+        }
+        return JournalSync.patchGist(token, JournalSync.getGistId(), content);
+      })
+      .then(function () {
+        dirty = false;
+        JournalSync.setLastSync(nowStamp());
+        syncStatus = "synced";
+      })
+      .catch(afterError)
+      .then(function () {
+        syncing = false;
+        renderSyncStatus();
+        if (dirty && JournalSync.getToken() && navigator.onLine) schedulePush();
+      });
+  }
+
+  function connectSync() {
+    const input = document.getElementById("syncTokenInput");
+    const err = document.getElementById("syncConnectError");
+    const token = (input.value || "").trim();
+    err.textContent = "";
+    if (!token) {
+      err.textContent = "Paste your token first.";
+      input.focus();
+      return;
+    }
+    JournalSync.setToken(token);
+    input.value = "";
+    syncStatus = "connecting";
+    renderSync();
+    runSync("connect").then(function () {
+      if (syncStatus === "error") {
+        if (syncError.indexOf("not accepted") !== -1) JournalSync.clearToken();
+        renderSync();
+        return;
+      }
+      toast("This device is connected. Use a token from the same GitHub account on your other devices.");
+      renderSync();
+    });
+  }
+
+  function disconnectSync() {
+    if (!confirm("Remove the token from this device? Your journal on this device and the copy in GitHub will stay as they are. Other devices stay connected.")) return;
+    clearTimeout(pushTimer);
+    clearTimeout(pullTimer);
+    JournalSync.clearToken();
+    JournalSync.setLastSync("");
+    dirty = false;
+    syncing = false;
+    syncStatus = "idle";
+    syncError = "";
+    toast("The token was removed from this device. Your journal is still here.");
+    renderSync();
+    if (currentView === "more") renderMore();
+  }
+
+  function syncStatusText() {
+    if (!JournalSync.getToken()) return "Not connected";
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      return "Offline — changes will sync when you are back online";
+    }
+    if (syncStatus === "connecting") return "Connecting…";
+    if (syncStatus === "syncing") return "Syncing…";
+    if (syncStatus === "error") return "Sync needs attention";
+    if (dirty) return "Waiting to send your latest changes…";
+    if (syncStatus === "synced" || JournalSync.getLastSync()) return "Connected";
+    return "Connected";
+  }
+
+  function renderSyncStatus() {
+    const line = document.getElementById("syncStatusLine");
+    if (!line) return;
+    const last = document.getElementById("syncLastLine");
+    const mask = document.getElementById("syncTokenMask");
+    const actions = document.getElementById("syncConnectedActions");
+    const setup = document.getElementById("syncSetupCard");
+    const errBox = document.getElementById("syncConnectError");
+    const connected = !!JournalSync.getToken();
+    const text = syncStatusText();
+    line.textContent = text;
+    line.className = "sync-status";
+    if (syncStatus === "error") line.classList.add("err");
+    else if (!connected) line.classList.add("warn");
+    else if (typeof navigator !== "undefined" && navigator.onLine === false) line.classList.add("warn");
+    else if (syncStatus === "synced" || connected) line.classList.add("ok");
+    const lastIso = JournalSync.getLastSync();
+    if (!connected) last.textContent = "";
+    else if (lastIso) last.textContent = "Last synced " + formatStampCentral(lastIso);
+    else last.textContent = "Not synced yet.";
+    if (syncStatus === "error" && syncError) {
+      last.textContent = (last.textContent ? last.textContent + " " : "") + syncError;
+    }
+    mask.textContent = connected ? ("The token stored on this device ends in " + JournalSync.maskToken(JournalSync.getToken()).replace(/^•+/, "")) : "";
+    // maskToken already has bullets; say it more clearly:
+    if (connected) mask.textContent = "The token stored on this device is " + JournalSync.maskToken(JournalSync.getToken());
+    actions.hidden = !connected;
+    if (setup) setup.hidden = connected;
+    if (errBox && connected) errBox.textContent = "";
+    if (errBox && !connected && syncStatus === "error") errBox.textContent = syncError;
+    renderSyncSummary();
+  }
+
+  function renderSyncSummary() {
+    const hint = document.getElementById("syncSummaryHint");
+    if (!hint) return;
+    if (!JournalSync.getToken()) {
+      hint.textContent = "Keep the same journal on your computer, tablet and phone. You are not connected yet.";
+      return;
+    }
+    const lastIso = JournalSync.getLastSync();
+    const last = lastIso ? (" Last synced " + formatStampCentral(lastIso) + ".") : "";
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      hint.textContent = "Offline — changes will sync when you are back online." + last;
+    } else if (syncStatus === "error") {
+      hint.textContent = "Sync needs attention." + (syncError ? " " + syncError : "") + last;
+    } else if (syncStatus === "syncing" || syncStatus === "connecting") {
+      hint.textContent = syncStatusText() + last;
+    } else {
+      hint.textContent = "Connected to your private GitHub Gist." + last;
+    }
+  }
+
+  function renderSync() {
+    renderSyncStatus();
+  }
+
   function exportBackup() {
     const payload = {
       app: "daily-journal",
       exportedAt: nowStamp(),
       timeZone: TZ,
-      data: state
+      data: JournalSync.syncPayload(state).data
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -1310,6 +1622,7 @@
         if (!confirm("Replace the journal on this device with the backup? This cannot be undone, except by importing another backup.")) return;
         state = Object.assign(defaultState(), data);
         if (!data.demo) state.demo = false;
+        migrateState();
         persist();
         viewDate = todayISO();
         render();
@@ -1364,7 +1677,8 @@
       v.hidden = v.getAttribute("data-view") !== name;
     });
     document.querySelectorAll(".tabbar .tab").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-view") === name);
+      var v = b.getAttribute("data-view");
+      b.classList.toggle("on", v === name || (name === "sync" && v === "more"));
     });
     const desired = "#" + name + (name === "progress" && progressTab !== "daily" ? "/" + progressTab : "");
     if (location.hash !== desired) history.replaceState(null, "", desired);
@@ -1386,6 +1700,7 @@
     if (currentView === "today") renderToday();
     else if (currentView === "journal") renderJournal();
     else if (currentView === "progress") renderProgress();
+    else if (currentView === "sync") renderSync();
     else renderMore();
   }
 
@@ -1451,6 +1766,7 @@
 
     document.getElementById("dismissSuggestBtn").addEventListener("click", function () {
       state.settings.suggestionsDismissed = true;
+      state.settingsTimes.suggestionsDismissed = nowStamp();
       persist();
       renderSuggestions();
     });
@@ -1462,7 +1778,7 @@
       const name = input.value.trim();
       if (!name) return;
       const colors = ["#2f5d93", "#c2410c", "#1f8a54", "#7c3aed", "#be185d", "#0f766e", "#a16207", "#3f6212"];
-      state.categories.push({ id: uid(), name: name, color: colors[state.categories.length % colors.length] });
+      state.categories.push({ id: uid(), name: name, color: colors[state.categories.length % colors.length], updatedAt: nowStamp() });
       input.value = "";
       persist();
       fillCategorySelect();
@@ -1480,8 +1796,24 @@
     });
     document.getElementById("printBtn").addEventListener("click", renderPrintWeek);
 
+    document.getElementById("openSyncBtn").addEventListener("click", function () { showView("sync"); });
+    document.getElementById("backToMoreBtn").addEventListener("click", function () { showView("more"); });
+    document.getElementById("syncConnectForm").addEventListener("submit", function (e) {
+      e.preventDefault();
+      connectSync();
+    });
+    document.getElementById("syncNowBtn").addEventListener("click", function () { runSync("manual"); });
+    document.getElementById("disconnectBtn").addEventListener("click", disconnectSync);
+
     bindJournalFields();
     window.addEventListener("hashchange", applyHash);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") schedulePull("focus");
+    });
+    window.addEventListener("focus", function () { schedulePull("focus"); });
+    window.addEventListener("online", function () {
+      if (JournalSync.getToken()) runSync("online");
+    });
   }
 
   load();
@@ -1493,11 +1825,16 @@
   ensureInstancesForDate(todayISO());
   updateBadges();
   save();
+  if (JournalSync.getToken()) runSync("open");
 
   window.__dj = {
     todayISO: todayISO,
     getState: function () { return state; },
     dayStats: dayStats,
-    viewDate: function () { return viewDate; }
+    viewDate: function () { return viewDate; },
+    mergeStates: JournalSync.mergeStates,
+    runSync: function () { return runSync("manual"); },
+    getSyncStatus: function () { return syncStatus; },
+    applyMergedState: applyMergedState
   };
 })();

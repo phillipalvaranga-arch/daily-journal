@@ -156,6 +156,15 @@
     <section id="view-more" class="view" data-view="more" hidden>
       <h2 class="view-h">More</h2>
 
+
+      <div class="card" id="syncSummaryCard">
+        <h3>Sync across your devices</h3>
+        <p class="hint" id="syncSummaryHint">Keep the same journal on your computer, tablet and phone.</p>
+        <div class="btn-row">
+          <button type="button" id="openSyncBtn" class="btn primary">Open Sync</button>
+        </div>
+      </div>
+
       <div class="card">
         <h3>Repeating tasks</h3>
         <p class="hint">These are added automatically on the days you choose. You can pause or change them at any time.</p>
@@ -176,7 +185,7 @@
 
       <div class="card">
         <h3>Backup</h3>
-        <p class="hint">Your journal stays on this device only. Save a backup file, or bring one in from another device.</p>
+        <p class="hint">Save a backup file, or bring one in from another device. Backups do not include your sync token. If Sync is connected, an imported backup is also sent to your other devices.</p>
         <div class="btn-row">
           <button type="button" id="exportBtn" class="btn">Export backup</button>
           <button type="button" id="importBtn" class="btn">Import backup</button>
@@ -201,9 +210,56 @@
 
       <div class="card about">
         <h3>About</h3>
-        <p>My Daily Journal keeps your tasks, notes and stats on this device. There is no account, and nothing is sent to a server. Dates and times use Central Time. Achievements and growth figures are computed only from the tasks you enter.</p>
+        <p>My Daily Journal keeps your tasks, notes and stats on this device. You can optionally sync them across your computer, tablet and phone through a private GitHub Gist, using a token you paste on the Sync screen. That token stays on this device and is not included in backups. Dates and times use Central Time. Achievements and growth figures are computed only from the tasks you enter.</p>
       </div>
     </section>
+
+    <!-- SYNC -->
+    <section id="view-sync" class="view" data-view="sync" hidden>
+      <p class="jump-row"><button type="button" id="backToMoreBtn" class="linkish">‹ Back to More</button></p>
+      <h2 class="view-h">Sync</h2>
+
+      <div class="card" id="syncStatusCard">
+        <h3>Status</h3>
+        <p id="syncStatusLine" class="sync-status">Not connected</p>
+        <p id="syncLastLine" class="hint"></p>
+        <p id="syncTokenMask" class="hint"></p>
+        <div class="btn-row" id="syncConnectedActions" hidden>
+          <button type="button" id="syncNowBtn" class="btn primary">Sync now</button>
+          <button type="button" id="disconnectBtn" class="btn danger">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="card" id="syncSetupCard">
+        <h3>Connect this device</h3>
+        <p>You can keep the same journal on your computer, tablet and phone. Sync uses a private GitHub note (called a Gist) on your own GitHub account. This app never asks for your GitHub password. The access token you paste is stored only on this device and is never shown back in full.</p>
+        <ol class="steps">
+          <li>Sign in to GitHub in your browser. If you do not have an account yet, create one at <a href="https://github.com/signup" target="_blank" rel="noopener noreferrer">github.com</a> first.</li>
+          <li>Open this page to create an access token with only the “gist” permission: <a href="https://github.com/settings/tokens/new?scopes=gist&amp;description=Daily%20Journal%20Sync" target="_blank" rel="noopener noreferrer">Create a GitHub token</a>.</li>
+          <li>On that page, confirm that only the <strong>gist</strong> box is checked, choose an expiration, and click <strong>Generate token</strong>.</li>
+          <li>Copy the token now. GitHub will not show it again.</li>
+          <li>Come back here, paste it below, and tap <strong>Connect</strong>.</li>
+        </ol>
+        <p class="hint">Use a token from the same GitHub account on every device. You can reuse this token or create a new one with the gist permission. Do not share the token with anyone. If it expires, create a new one and connect again.</p>
+        <form id="syncConnectForm" autocomplete="off">
+          <label>
+            <span>GitHub access token</span>
+            <input id="syncTokenInput" type="password" maxlength="200" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" placeholder="Paste your token">
+          </label>
+          <div class="btn-row">
+            <button type="submit" id="syncConnectBtn" class="btn primary">Connect</button>
+          </div>
+          <p id="syncConnectError" class="sync-error" role="alert"></p>
+        </form>
+      </div>
+
+      <div class="card about">
+        <h3>How it stays in sync</h3>
+        <p>The first device that connects creates a private Gist named “My Daily Journal Sync.” Other devices that connect with a token from the same account find that same Gist automatically. Changes are sent a few seconds after you make them, and again when you open the app or come back to it. If you are offline, the app keeps your changes and sends them when you are back online.</p>
+        <p>If you edit the same item on two devices before they sync, the later edit is kept. Deleting an item on one device is remembered so it does not come back from the other device, unless that other device changed it more recently.</p>
+      </div>
+    </section>
+
   </main>
 
   <nav class="tabbar" aria-label="Main">
@@ -237,6 +293,7 @@
 
   <div id="printArea" class="print-area" hidden></div>
 
+  <script src="sync.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
