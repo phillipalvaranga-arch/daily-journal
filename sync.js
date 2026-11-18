@@ -11,7 +11,7 @@
   var LAST_KEY = "dj-sync-last";
 
   function emptyTombs() {
-    return { tasks: {}, recurring: {}, categories: {}, journal: {}, skipped: {} };
+    return { tasks: {}, recurring: {}, categories: {}, journal: {}, skipped: {}, reminders: {} };
   }
 
   function stampOf(item) {
@@ -201,6 +201,7 @@
     var deduped = dedupeRecurringTasks(tasksM.list, tasksM.tombstones);
     var recM = mergeById(local.recurring, remote.recurring, lt.recurring, rt.recurring);
     var catM = mergeById(local.categories, remote.categories, lt.categories, rt.categories);
+    var remM = mergeById(local.reminders, remote.reminders, lt.reminders, rt.reminders);
     var jourM = mergeJournal(local.journal, remote.journal, lt.journal, rt.journal);
     var skipM = mergeSkipped(local.skipped, remote.skipped, lt.skipped, rt.skipped);
     var setM = mergeSettings(local.settings, remote.settings, local.settingsTimes, remote.settingsTimes);
@@ -212,6 +213,7 @@
       categories: catM.list,
       tasks: deduped.list,
       recurring: recM.list,
+      reminders: remM.list,
       journal: jourM.journal,
       skipped: skipM.skipped,
       badgesEarned: mergeBadges(local.badgesEarned, remote.badgesEarned),
@@ -222,7 +224,8 @@
         recurring: recM.tombstones,
         categories: catM.tombstones,
         journal: jourM.tombstones,
-        skipped: skipM.tombstones
+        skipped: skipM.tombstones,
+        reminders: remM.tombstones
       }
     };
   }
@@ -233,6 +236,7 @@
       categories: state.categories || [],
       tasks: state.tasks || [],
       recurring: state.recurring || [],
+      reminders: state.reminders || [],
       journal: state.journal || {},
       skipped: state.skipped || {},
       badgesEarned: state.badgesEarned || {},

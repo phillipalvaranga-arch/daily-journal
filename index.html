@@ -82,6 +82,10 @@
             <span>Time</span>
             <input id="taskTime" type="time">
           </label>
+          <label>
+            <span>&#128276; Remind me</span>
+            <input id="taskRemind" type="time" aria-label="Remind me at (optional)">
+          </label>
         </div>
       </form>
 
@@ -150,6 +154,46 @@
       </div>
       <div id="progressBody"></div>
       <div id="badgeBoard" class="card badges"></div>
+    </section>
+
+    <!-- REMINDERS -->
+    <section id="view-reminders" class="view" data-view="reminders" hidden>
+      <h2 class="view-h">Reminders</h2>
+      <p id="remNextLine" class="rem-next" aria-live="polite"></p>
+
+      <div class="card" id="remPermCard">
+        <h3>Alerts on this device</h3>
+        <div id="remPermBody"></div>
+      </div>
+
+      <div class="card">
+        <h3>Daily reminders</h3>
+        <p class="hint">Turn one on with the switch, and tap the time to change it. Times are Central Time.</p>
+        <div id="remDailyList"></div>
+      </div>
+
+      <div class="card">
+        <h3>My reminders</h3>
+        <p class="hint">Your own reminders, with a label, a time, and the days you want.</p>
+        <div id="remCustomList"></div>
+        <button type="button" id="remAddBtn" class="btn primary big">+ Add a reminder</button>
+      </div>
+
+      <div class="card">
+        <h3>Task reminders</h3>
+        <p class="hint">Tap the bell on any task on the Today screen to set an alert for just that task.</p>
+        <div id="remTaskList"></div>
+      </div>
+
+      <div class="card rem-explain">
+        <h3>&#128197; Alerts that always ring</h3>
+        <p>Pop-up alerts from this app only work while the app or your browser is running (it can be in the background). If the app is closed, a reminder you missed shows up as soon as you open it again.</p>
+        <p>For alerts that ring <strong>even when the app is closed</strong>, add your reminders to your phone or computer calendar. Tap <strong>Add to my calendar</strong>, then open the file that downloads. Your calendar will alert you at that time every day you chose.</p>
+        <p class="hint">On an Android phone, if opening the file does not add it, use the <strong>Google Calendar</strong> button instead. Google Calendar uses your usual alert setting for new events.</p>
+        <div class="btn-row">
+          <button type="button" id="remAllIcsBtn" class="btn big">&#128197; Add all my reminders to my calendar</button>
+        </div>
+      </div>
     </section>
 
     <!-- MORE -->
@@ -275,11 +319,17 @@
       <span class="tab-ic" aria-hidden="true">↗</span>
       Progress
     </button>
+    <button type="button" class="tab" data-view="reminders">
+      <span class="tab-ic" aria-hidden="true"><svg viewBox="0 0 24 24" width="20" height="20" focusable="false"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-1.7 1.7A1 1 0 0 0 4 19.4h16a1 1 0 0 0 .7-1.7L19 16Z"/></svg></span>
+      Reminders
+    </button>
     <button type="button" class="tab" data-view="more">
       <span class="tab-ic" aria-hidden="true">☰</span>
       More
     </button>
   </nav>
+
+  <div id="remBanner" class="rem-banner" role="alert" aria-live="assertive" hidden></div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -294,6 +344,7 @@
   <div id="printArea" class="print-area" hidden></div>
 
   <script src="sync.js"></script>
+  <script src="reminders.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {

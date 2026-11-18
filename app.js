@@ -5,7 +5,12 @@
   const TZ = "America/Chicago";
   const STORE = "daily-journal-v1";
   const THEME_KEY = "dj-theme";
-  const VIEWS = ["today", "journal", "progress", "more", "sync"];
+  const VIEWS = ["today", "journal", "progress", "reminders", "more", "sync"];
+  const BELL_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-1.7 1.7A1 1 0 0 0 4 19.4h16a1 1 0 0 0 .7-1.7L19 16Z"/></svg>';
+  const BUILTIN_REMINDERS = [
+    { id: "rem-plan", kind: "plan", label: "Plan my day", time: "07:30", days: [], enabled: false },
+    { id: "rem-check", kind: "check", label: "Check off my tasks", time: "20:00", days: [], enabled: false }
+  ];
 
   const DEFAULT_CATEGORIES = [
     { id: "work", name: "Work / Trading", color: "#2f5d93" },
@@ -130,12 +135,13 @@
       categories: DEFAULT_CATEGORIES.map(function (c) { return Object.assign({}, c); }),
       tasks: [],
       recurring: [],
+      reminders: BUILTIN_REMINDERS.map(function (r) { return Object.assign({ createdAt: "", updatedAt: "" }, r, { days: [] }); }),
       journal: {},
       skipped: {},
       badgesEarned: {},
       settings: { suggestionsDismissed: false },
       settingsTimes: {},
-      tombstones: { tasks: {}, recurring: {}, categories: {}, journal: {}, skipped: {} },
+      tombstones: { tasks: {}, recurring: {}, categories: {}, journal: {}, skipped: {}, reminders: {} },
       demo: false
     };
   }
@@ -161,6 +167,7 @@
       }
       if (!Array.isArray(state.tasks)) state.tasks = [];
       if (!Array.isArray(state.recurring)) state.recurring = [];
+      if (!Array.isArray(state.reminders)) state.reminders = [];
       if (!state.journal || typeof state.journal !== "object") state.journal = {};
       if (!state.skipped || typeof state.skipped !== "object") state.skipped = {};
       if (!state.badgesEarned || typeof state.badgesEarned !== "object") state.badgesEarned = {};
@@ -174,8 +181,18 @@
 
   function migrateState() {
     if (!state.tombstones) state.tombstones = JournalSync.emptyTombs();
-    ["tasks", "recurring", "categories", "journal", "skipped"].forEach(function (k) {
+    ["tasks", "recurring", "categories", "journal", "skipped", "reminders"].forEach(function (k) {
       if (!state.tombstones[k]) state.tombstones[k] = {};
+    });
+    if (!Array.isArray(state.reminders)) state.reminders = [];
+    BUILTIN_REMINDERS.forEach(function (b) {
+      if (!state.reminders.some(function (r) { return r && r.id === b.id; })) {
+        state.reminders.push(Object.assign({ createdAt: "", updatedAt: "" }, b, { days: [] }));
+      }
+    });
+    state.reminders.forEach(function (item) {
+      if (item && item.updatedAt == null) item.updatedAt = item.createdAt || "";
+      if (item && !Array.isArray(item.days)) item.days = [];
     });
     if (!state.settingsTimes) state.settingsTimes = {};
     if (!state.settings) state.settings = { suggestionsDismissed: false };
@@ -278,6 +295,8 @@
         categoryId: rule.categoryId || "",
         priority: rule.priority || "",
         time: rule.time || "",
+        remindAt: rule.remindAt || "",
+        remindSetAt: "",
         date: iso,
         done: false,
         doneAt: null,
@@ -510,6 +529,8 @@
       categoryId: fields.categoryId || "",
       priority: fields.priority || "",
       time: fields.time || "",
+      remindAt: fields.remindAt || "",
+      remindSetAt: fields.remindAt ? nowStamp() : "",
       date: date,
       done: false,
       doneAt: null,
@@ -630,7 +651,7 @@
   }
 
   const toastEl = document.getElementById("toast");
-  function toast(msg, onUndo) {
+  function toast(msg, onUndo, actionLabel) {
     clearTimeout(toastTimer);
     toastEl.innerHTML = "";
     const span = document.createElement("span");
@@ -639,7 +660,7 @@
     if (onUndo) {
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = "Undo";
+      b.textContent = actionLabel || "Undo";
       b.addEventListener("click", function () {
         toastEl.classList.remove("show");
         onUndo();
@@ -767,6 +788,7 @@
       meta += '<span class="badge ' + escapeHtml(t.priority) + '">' + label + "</span>";
     }
     if (t.time) meta += '<span class="badge time">' + escapeHtml(formatTime(t.time)) + "</span>";
+    if (t.remindAt && !t.done) meta += '<span class="badge remind">' + BELL_SVG + escapeHtml(formatTime(t.remindAt)) + "</span>";
     return (
       '<li class="task' + (t.done ? " done" : "") + '" data-id="' + escapeHtml(t.id) + '">' +
         '<button type="button" class="drag-handle" aria-label="Reorder ' + escapeHtml(t.title) + '" ' +
@@ -777,6 +799,10 @@
           '<span class="task-title">' + escapeHtml(t.title) + "</span>" +
           (meta ? '<div class="task-meta">' + meta + "</div>" : "") +
         "</button>" +
+        (t.done ? '<span class="task-bell-gap"></span>' :
+          '<button type="button" class="task-bell' + (t.remindAt ? " on" : "") + '" aria-label="' +
+            (t.remindAt ? "Reminder at " + escapeHtml(formatTime(t.remindAt)) + ". Change reminder for " : "Set a reminder for ") +
+            escapeHtml(t.title) + '">' + BELL_SVG + "</button>") +
       "</li>"
     );
   }
@@ -818,6 +844,12 @@
         } else {
           renderToday();
         }
+      });
+    });
+    root.querySelectorAll(".task-bell").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openTaskReminder(btn.closest(".task").getAttribute("data-id"));
       });
     });
     root.querySelectorAll(".task-body").forEach(function (btn) {
@@ -884,19 +916,29 @@
         '<option value="low"' + (t.priority === "low" ? " selected" : "") + ">Low</option>" +
       "</select></label>" +
       '<label><span>Time</span><input id="edTime" type="time" value="' + escapeHtml(t.time || "") + '"></label>' +
-      '<label><span>Date</span><input id="edDate" type="date" value="' + escapeHtml(t.date) + '"></label>',
+      '<label><span>Date</span><input id="edDate" type="date" value="' + escapeHtml(t.date) + '"></label>' +
+      '<label><span>Remind me at (optional)</span><input id="edRemind" type="time" value="' + escapeHtml(t.remindAt || "") + '"></label>' +
+      '<p class="hint">Leave the reminder blank for no alert. Alerts use Central Time.</p>',
       [
         { label: "Save", cls: "primary", onClick: function () {
           const title = document.getElementById("edTitle").value.trim();
           if (!title) { document.getElementById("edTitle").focus(); return; }
           const date = document.getElementById("edDate").value || t.date;
-          updateTask(t.id, {
+          const remindAt = document.getElementById("edRemind").value || "";
+          const patch = {
             title: title,
             categoryId: document.getElementById("edCat").value,
             priority: document.getElementById("edPri").value,
             time: document.getElementById("edTime").value,
             date: date
-          });
+          };
+          if (remindAt !== (t.remindAt || "") || date !== t.date) {
+            patch.remindAt = remindAt;
+            patch.remindSetAt = remindAt ? nowStamp() : "";
+          }
+          updateTask(t.id, patch);
+          if (patch.remindAt) afterReminderSaved(date, remindAt);
+          refreshReminders();
           closeModal();
           render();
         }},
@@ -1299,6 +1341,7 @@
         '<option value="medium"' + (r && r.priority === "medium" ? " selected" : "") + ">Medium</option>" +
         '<option value="low"' + (r && r.priority === "low" ? " selected" : "") + ">Low</option></select></label>" +
       '<label><span>Time (optional)</span><input id="rcTime" type="time" value="' + escapeHtml(r && r.time ? r.time : "") + '"></label>' +
+      '<label><span>Remind me at (optional)</span><input id="rcRemind" type="time" value="' + escapeHtml(r && r.remindAt ? r.remindAt : "") + '"></label>' +
       '<label><span>Repeats</span><select id="rcType">' +
         '<option value="daily"' + (r && r.type === "daily" ? " selected" : "") + ">Every day</option>" +
         '<option value="weekdays"' + (!r || r.type === "weekdays" ? " selected" : "") + ">Weekdays</option>" +
@@ -1324,6 +1367,7 @@
             categoryId: document.getElementById("rcCat").value,
             priority: document.getElementById("rcPri").value,
             time: document.getElementById("rcTime").value,
+            remindAt: document.getElementById("rcRemind").value || "",
             type: type,
             weekdays: weekdays,
             monthDay: Number(document.getElementById("rcMonthDay").value || 1),
@@ -1332,8 +1376,19 @@
             createdAt: r ? r.createdAt : nowStamp(),
             updatedAt: nowStamp()
           };
+          const oldRemind = r ? (r.remindAt || "") : "";
           if (r) Object.assign(r, payload);
           else { payload.id = uid(); state.recurring.push(payload); }
+          if (r && oldRemind !== payload.remindAt) {
+            state.tasks.forEach(function (t) {
+              if (t.recurringId === r.id && !t.done && t.date >= todayISO() && (t.remindAt || "") === oldRemind) {
+                t.remindAt = payload.remindAt;
+                t.remindSetAt = nowStamp();
+                touch(t);
+              }
+            });
+          }
+          setTimeout(refreshReminders, 0);
           persist();
           ensureInstancesForDate(viewDate);
           closeModal();
@@ -1356,6 +1411,782 @@
       document.getElementById("rcMonthly").hidden = typeSel.value !== "monthly";
     }
     typeSel.addEventListener("change", sync);
+  }
+
+
+  /* ===================== Reminders & alerts ===================== */
+  const R = window.DJReminders;
+  const REM_LOG_KEY = "dj-rem-log";
+  const REM_SNOOZE_KEY = "dj-rem-snooze";
+  const REM_MUTE_KEY = "dj-rem-mute";
+  const REM_TRIG_KEY = "dj-rem-triggers";
+  const REM_CACHE = "dj-reminders";
+  const REM_SCHEDULE_URL = "./__reminder-schedule.json";
+  const REM_SWFIRED_URL = "./__reminder-swfired.json";
+  const CATCHUP_HOURS = 3;
+  const APP_URL = "https://phillipalvaranga-arch.github.io/daily-journal/";
+  let remTimer = 0;
+  let remExactTimer = 0;
+  let remQueue = [];
+  let remChecking = false;
+
+  function readJSON(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch (e) { return fallback; }
+  }
+  function writeJSON(key, val) {
+    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
+  }
+  function isMuted() { try { return localStorage.getItem(REM_MUTE_KEY) === "1"; } catch (e) { return false; } }
+  function setMuted(on) { try { if (on) localStorage.setItem(REM_MUTE_KEY, "1"); else localStorage.removeItem(REM_MUTE_KEY); } catch (e) {} }
+
+  function notifySupported() { return typeof window.Notification !== "undefined"; }
+  function notifyPermission() { return notifySupported() ? Notification.permission : "unsupported"; }
+  function triggersSupported() {
+    return notifySupported() && typeof window.TimestampTrigger !== "undefined" && "showTrigger" in Notification.prototype;
+  }
+
+  function reminderById(id) {
+    return (state.reminders || []).find(function (r) { return r && r.id === id; }) || null;
+  }
+
+  function checkBody() {
+    const s = dayStats(todayISO());
+    if (!s.total) return "Take a minute to look back on your day and write a short note.";
+    const left = s.total - s.done;
+    if (!left) return "All " + s.total + " of your tasks are done today. Great work!";
+    return "You have " + left + " of " + s.total + " task" + (s.total === 1 ? "" : "s") + " left today. Tap to check them off.";
+  }
+  function planBody() {
+    const s = dayStats(todayISO());
+    if (s.total) return "Good morning! You already have " + s.total + " task" + (s.total === 1 ? "" : "s") + " on today's list. Add anything else you need to do.";
+    return "Good morning! Open your journal and add today's tasks.";
+  }
+
+  function occForReminder(rem, date) {
+    const key = "r|" + rem.id + "|" + date + "|" + rem.time;
+    let title = rem.label || "Reminder";
+    let body = "It is " + formatTime(rem.time) + ". " + (rem.note || "Open My Daily Journal.");
+    if (rem.kind === "plan") { title = "Plan my day"; body = planBody(); }
+    if (rem.kind === "check") { title = "Check off my tasks"; body = checkBody(); }
+    return { key: key, type: "reminder", kind: rem.kind || "custom", reminderId: rem.id, date: date, time: rem.time, wall: date + "T" + rem.time, title: title, body: body };
+  }
+  function occForTask(t) {
+    const key = "t|" + t.id + "|" + t.date + "|" + t.remindAt;
+    const when = t.time ? " (task time " + formatTime(t.time) + ")" : "";
+    return { key: key, type: "task", kind: "task", taskId: t.id, date: t.date, time: t.remindAt, wall: t.date + "T" + t.remindAt,
+      title: "⏰ " + t.title, body: "Task reminder" + when + ". Tap Mark done when you finish it." };
+  }
+
+  /* All reminder occurrences whose Central Time falls in (fromWall, toWall]. */
+  function occurrencesBetween(fromWall, toWall) {
+    const out = [];
+    const fromDate = fromWall.slice(0, 10);
+    const toDate = toWall.slice(0, 10);
+    const dates = [];
+    for (let d = fromDate, i = 0; d <= toDate && i < 5; d = R.addDays(d, 1), i++) dates.push(d);
+    (state.reminders || []).forEach(function (rem) {
+      if (!rem || !rem.enabled || !/^\d\d:\d\d$/.test(rem.time || "")) return;
+      const armed = R.wallOfStamp(rem.updatedAt);
+      dates.forEach(function (d) {
+        if (!R.runsOn(rem, d)) return;
+        const w = d + "T" + rem.time;
+        if (w <= fromWall || w > toWall) return;
+        if (armed && w < armed) return;
+        out.push(occForReminder(rem, d));
+      });
+    });
+    state.tasks.forEach(function (t) {
+      if (!t || t.done || !/^\d\d:\d\d$/.test(t.remindAt || "")) return;
+      const w = t.date + "T" + t.remindAt;
+      if (w <= fromWall || w > toWall) return;
+      const armed = R.wallOfStamp(t.remindSetAt);
+      if (armed && w < armed) return;
+      out.push(occForTask(t));
+    });
+    out.sort(function (a, b) { return a.wall < b.wall ? -1 : a.wall > b.wall ? 1 : 0; });
+    return out;
+  }
+
+  function occFromKey(key) {
+    const parts = String(key || "").split("#")[0].split("|");
+    if (parts[0] === "t") {
+      const t = getTask(parts[1]);
+      if (t) return Object.assign(occForTask(t), { key: parts.join("|") });
+    } else if (parts[0] === "r") {
+      const rem = reminderById(parts[1]);
+      if (rem) return Object.assign(occForReminder(rem, parts[2]), { key: parts.join("|"), time: parts[3] });
+    }
+    return { key: key, type: "test", kind: "test", title: "My Daily Journal", body: "Reminder" };
+  }
+
+  function pruneLog(log) {
+    const cutoff = Date.now() - 4 * 86400000;
+    Object.keys(log).forEach(function (k) {
+      const t = new Date(log[k]).getTime();
+      if (!t || t < cutoff) delete log[k];
+    });
+    return log;
+  }
+
+  function remCache() {
+    if (!("caches" in window)) return Promise.resolve(null);
+    return caches.open(REM_CACHE).catch(function () { return null; });
+  }
+  function readSwFired() {
+    return remCache().then(function (c) {
+      if (!c) return {};
+      return c.match(REM_SWFIRED_URL).then(function (r) { return r ? r.json() : {}; });
+    }).catch(function () { return {}; });
+  }
+
+  function checkReminders(reason) {
+    if (remChecking) return Promise.resolve([]);
+    remChecking = true;
+    return readSwFired().then(function (swFired) {
+      const log = pruneLog(readJSON(REM_LOG_KEY, {}));
+      Object.keys(swFired || {}).forEach(function (k) { if (!log[k]) log[k] = swFired[k]; });
+      const now = R.centralNow();
+      const fromWall = R.centralNow(Date.now() - CATCHUP_HOURS * 3600000).wall;
+      const due = occurrencesBetween(fromWall, now.wall).filter(function (o) { return !log[o.key]; });
+      const fired = [];
+      due.forEach(function (o) {
+        log[o.key] = nowStamp();
+        const late = o.wall < R.centralNow(Date.now() - 2 * 60000).wall;
+        if (late) o.body = "Missed at " + formatTime(o.time) + ". " + o.body;
+        fireAlert(o, { late: late });
+        fired.push(o.key);
+      });
+      // Snoozed alerts
+      const snoozes = readJSON(REM_SNOOZE_KEY, []);
+      const keep = [];
+      snoozes.forEach(function (sz) {
+        if (sz.until <= Date.now()) {
+          const o = occFromKey(sz.key);
+          o.key = sz.key.split("#")[0] + "#s" + sz.until;
+          if (sz.title) o.title = sz.title;
+          o.body = "Snoozed reminder. " + (o.type === "reminder" && o.kind === "check" ? checkBody() : o.type === "reminder" && o.kind === "plan" ? planBody() : (sz.body || o.body));
+          if (o.type === "task") {
+            const t = getTask(o.taskId);
+            if (!t || t.done) return;
+          }
+          fireAlert(o, {});
+          fired.push(o.key);
+        } else {
+          keep.push(sz);
+        }
+      });
+      writeJSON(REM_SNOOZE_KEY, keep);
+      writeJSON(REM_LOG_KEY, log);
+      planNextCheck();
+      mirrorSchedule(log);
+      if (currentView === "reminders" && reason !== "tick") renderReminderLists();
+      remChecking = false;
+      return fired;
+    }).catch(function () {
+      remChecking = false;
+      return [];
+    });
+  }
+
+  function upcoming(hours) {
+    const now = R.centralNow();
+    const to = R.centralNow(Date.now() + hours * 3600000).wall;
+    const log = readJSON(REM_LOG_KEY, {});
+    return occurrencesBetween(now.wall, to).filter(function (o) { return !log[o.key]; });
+  }
+
+  function planNextCheck() {
+    clearTimeout(remExactTimer);
+    const next = upcoming(1)[0];
+    let nextEpoch = next ? R.centralToEpoch(next.date, next.time) : 0;
+    readJSON(REM_SNOOZE_KEY, []).forEach(function (sz) {
+      if (!nextEpoch || sz.until < nextEpoch) nextEpoch = sz.until;
+    });
+    if (!nextEpoch) return;
+    const wait = nextEpoch - Date.now() + 400;
+    if (wait < 45000) remExactTimer = setTimeout(function () { checkReminders("exact"); }, Math.max(250, wait));
+  }
+
+  /* Copy the next 36 hours to Cache Storage so the service worker can ring during a background check. */
+  function mirrorSchedule(log) {
+    const items = upcoming(36).map(function (o) {
+      return { key: o.key, title: o.title, body: o.body, due: R.centralToEpoch(o.date, o.time), taskId: o.taskId || "", kind: o.kind };
+    });
+    readJSON(REM_SNOOZE_KEY, []).forEach(function (sz) {
+      const o = occFromKey(sz.key);
+      items.push({ key: sz.key.split("#")[0] + "#s" + sz.until, title: sz.title || o.title, body: "Snoozed reminder. " + (sz.body || o.body), due: sz.until, taskId: o.taskId || "", kind: o.kind });
+    });
+    remCache().then(function (c) {
+      if (!c) return;
+      return c.put(REM_SCHEDULE_URL, new Response(JSON.stringify({ updatedAt: nowStamp(), items: items, fired: Object.keys(log || {}) }), { headers: { "Content-Type": "application/json" } }));
+    }).catch(function () {});
+    scheduleTriggers(items);
+  }
+
+  /* Notification Triggers: only where the browser supports them. */
+  function scheduleTriggers(items) {
+    if (!triggersSupported() || notifyPermission() !== "granted" || !("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      const wanted = {};
+      items.forEach(function (it) { if (it.due > Date.now() && it.due - Date.now() < 24 * 3600000) wanted[it.key] = it; });
+      return reg.getNotifications({ includeTriggered: true }).then(function (list) {
+        list.forEach(function (n) {
+          if (n.data && n.data.scheduled && !wanted[n.tag]) n.close();
+        });
+        const have = {};
+        list.forEach(function (n) { have[n.tag] = true; });
+        Object.keys(wanted).forEach(function (k) {
+          if (have[k]) return;
+          const it = wanted[k];
+          reg.showNotification(it.title, notifOptions({ key: it.key, body: it.body, taskId: it.taskId, kind: it.kind, scheduled: true },
+            { showTrigger: new window.TimestampTrigger(it.due) }));
+        });
+      });
+    }).catch(function () {});
+  }
+
+  function notifOptions(o, extra) {
+    const max = (notifySupported() && Notification.maxActions) || 2;
+    let actions = o.taskId
+      ? [{ action: "done", title: "✓ Mark done" }, { action: "snooze10", title: "Snooze 10 min" }, { action: "snooze60", title: "Snooze 1 hr" }]
+      : [{ action: "snooze10", title: "Snooze 10 min" }, { action: "snooze60", title: "Snooze 1 hr" }, { action: "dismiss", title: "Dismiss" }];
+    actions = actions.slice(0, Math.max(0, max));
+    return Object.assign({
+      body: o.body,
+      tag: o.key,
+      renotify: true,
+      requireInteraction: true,
+      icon: "icons/icon-192.png",
+      badge: "icons/favicon.png",
+      data: { key: o.key, taskId: o.taskId || "", kind: o.kind || "", scheduled: !!o.scheduled, url: location.href.split("#")[0].split("?")[0] },
+      actions: actions
+    }, extra || {});
+  }
+
+  function showSystemNotification(o) {
+    if (notifyPermission() !== "granted") return Promise.resolve(false);
+    const opts = notifOptions(o);
+    if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
+      return navigator.serviceWorker.ready.then(function (reg) {
+        return reg.showNotification(o.title, opts).then(function () { return true; });
+      }).catch(function () { return plainNotification(o, opts); });
+    }
+    return Promise.resolve(plainNotification(o, opts));
+  }
+  function plainNotification(o, opts) {
+    try {
+      const copy = Object.assign({}, opts);
+      delete copy.actions;
+      const n = new Notification(o.title, copy);
+      n.onclick = function () { window.focus(); showBannerFor(o); n.close(); };
+      return true;
+    } catch (e) { return false; }
+  }
+  function closeSystemNotification(key) {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.getRegistration().then(function (reg) {
+      if (!reg) return;
+      return reg.getNotifications().then(function (list) {
+        list.forEach(function (n) { if (n.tag === key || (n.tag || "").split("#")[0] === String(key).split("#")[0]) n.close(); });
+      });
+    }).catch(function () {});
+  }
+
+  function fireAlert(o, opts) {
+    opts = opts || {};
+    const visible = document.visibilityState === "visible";
+    showBannerFor(o);
+    if (visible && !isMuted()) R.chime();
+    if (!(opts.late && visible && document.hasFocus && document.hasFocus())) showSystemNotification(o);
+    window.__djLastAlert = { key: o.key, title: o.title, at: nowStamp() };
+  }
+
+  /* ---------- In-app banner ---------- */
+  function showBannerFor(o) {
+    if (remQueue.some(function (q) { return q.key === o.key; })) { renderBanner(); return; }
+    remQueue.push(o);
+    renderBanner();
+  }
+  function renderBanner() {
+    const el = document.getElementById("remBanner");
+    if (!el) return;
+    const o = remQueue[0];
+    if (!o) {
+      el.classList.remove("show");
+      setTimeout(function () { if (!remQueue.length) { el.hidden = true; el.innerHTML = ""; } }, 300);
+      return;
+    }
+    const isTask = o.type === "task";
+    const more = remQueue.length > 1 ? '<span class="rb-count">1 of ' + remQueue.length + "</span>" : "";
+    el.innerHTML =
+      '<div class="rb-card">' +
+        '<div class="rb-top"><span class="rb-bell">' + BELL_SVG + "</span>" +
+          '<div class="rb-text"><strong class="rb-title">' + escapeHtml(o.title) + "</strong>" +
+          '<span class="rb-body">' + escapeHtml(o.body) + "</span></div>" + more +
+          '<button type="button" class="rb-mute" aria-pressed="' + (isMuted() ? "true" : "false") + '" aria-label="' + (isMuted() ? "Turn chime on" : "Mute chime") + '">' +
+            (isMuted() ? "🔇" : "🔔") + "</button></div>" +
+        '<div class="rb-actions">' +
+          (isTask ? '<button type="button" class="btn primary" data-rb="done">✓ Mark done</button>'
+                  : '<button type="button" class="btn primary" data-rb="open">Open today\'s list</button>') +
+          '<button type="button" class="btn" data-rb="snooze10">Snooze 10 min</button>' +
+          '<button type="button" class="btn" data-rb="snooze60">Snooze 1 hr</button>' +
+          '<button type="button" class="btn ghost" data-rb="dismiss">Dismiss</button>' +
+        "</div>" +
+      "</div>";
+    el.hidden = false;
+    requestAnimationFrame(function () { el.classList.add("show"); });
+    el.querySelectorAll("[data-rb]").forEach(function (b) {
+      b.addEventListener("click", function () { handleReminderAction(b.getAttribute("data-rb"), o); });
+    });
+    el.querySelector(".rb-mute").addEventListener("click", function () {
+      setMuted(!isMuted());
+      if (!isMuted()) R.chime();
+      renderBanner();
+      if (currentView === "reminders") renderReminderPerm();
+    });
+  }
+  function dropFromQueue(key) {
+    remQueue = remQueue.filter(function (q) { return q.key !== key; });
+    renderBanner();
+  }
+
+  function handleReminderAction(action, o) {
+    if (!o) return;
+    dropFromQueue(o.key);
+    closeSystemNotification(o.key);
+    if (action === "done") {
+      const t = getTask(o.taskId);
+      if (t && !t.done) { toggleTask(t.id); toast("Marked done. Nice work!"); }
+      else toast("That task is already done.");
+      render();
+      return;
+    }
+    if (action === "snooze10" || action === "snooze60") {
+      const mins = action === "snooze10" ? 10 : 60;
+      const until = Date.now() + mins * 60000;
+      const list = readJSON(REM_SNOOZE_KEY, []).filter(function (s) { return s.key.split("#")[0] !== o.key.split("#")[0]; });
+      list.push({ key: o.key.split("#")[0], until: until, title: o.title, body: o.body.replace(/^(Missed at [^.]+\. |Snoozed reminder\. )+/, "") });
+      writeJSON(REM_SNOOZE_KEY, list);
+      toast("Snoozed until " + formatTime(R.centralNow(until).hhmm) + ".");
+      planNextCheck();
+      mirrorSchedule(readJSON(REM_LOG_KEY, {}));
+      return;
+    }
+    if (action === "open") {
+      viewDate = todayISO();
+      showView("today");
+    }
+  }
+
+  /* Messages from the service worker when a notification button is tapped. */
+  function onWorkerMessage(e) {
+    const m = e.data || {};
+    if (m.type !== "dj-reminder-action") return;
+    const o = occFromKey(m.key);
+    if (m.taskId) o.taskId = m.taskId;
+    if (m.title) o.title = m.title;
+    if (m.body) o.body = m.body;
+    o.key = m.key;
+    if (!m.action || m.action === "open") {
+      window.focus();
+      if (o.type === "task") { viewDate = o.date || todayISO(); showView("today"); }
+      else showView("today");
+      return;
+    }
+    handleReminderAction(m.action, o);
+  }
+
+  function handleLaunchAction() {
+    let params;
+    try { params = new URLSearchParams(location.search); } catch (e) { return; }
+    const act = params.get("remact");
+    const key = params.get("remkey");
+    if (!key) return;
+    history.replaceState(null, "", location.pathname + (location.hash || "#today"));
+    const o = occFromKey(key);
+    o.key = key;
+    if (!act || act === "open") { showView("today"); return; }
+    handleReminderAction(act, o);
+    if (act === "snooze10" || act === "snooze60") {
+      toast("Snoozed. Keep this app open (it can stay in the background) so the alert can ring.");
+    }
+  }
+
+  /* ---------- Permission ---------- */
+  function requestAlerts() {
+    R.unlockAudio();
+    if (!notifySupported()) {
+      toast("This browser cannot show alerts. You will still get the banner and chime while the app is open.");
+      renderReminderPerm();
+      return Promise.resolve("unsupported");
+    }
+    return Promise.resolve(Notification.requestPermission()).then(function (p) {
+      if (p === "granted") {
+        toast("Alerts are on for this device.");
+        registerPeriodic();
+        mirrorSchedule(readJSON(REM_LOG_KEY, {}));
+      } else if (p === "denied") {
+        toast("Alerts were blocked. You can still use the banner, chime and calendar alerts.");
+      }
+      renderReminderPerm();
+      return p;
+    });
+  }
+
+  function registerPeriodic() {
+    if (!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.ready.then(function (reg) {
+      if (!reg.periodicSync || !navigator.permissions) return;
+      return navigator.permissions.query({ name: "periodic-background-sync" }).then(function (st) {
+        if (st.state !== "granted") return;
+        return reg.periodicSync.register("dj-reminders", { minInterval: 15 * 60 * 1000 });
+      });
+    }).catch(function () {});
+  }
+
+  function sendTestAlert() {
+    R.unlockAudio();
+    fireAlert({ key: "test|" + Date.now(), type: "test", kind: "test", title: "Test alert", body: "This is how your reminders will look and sound on this device." }, {});
+  }
+
+  function afterReminderSaved(date, hhmm) {
+    const now = R.centralNow();
+    if ((date + "T" + hhmm) < now.wall) {
+      toast("That reminder time has already passed, so it will not ring.");
+      return;
+    }
+    if (notifyPermission() === "default") {
+      toast("Reminder saved. Turn on alerts so this device can ping you.", function () { requestAlerts(); }, "Turn on");
+    } else {
+      toast("Reminder set for " + formatTime(hhmm) + (date === todayISO() ? " today." : " on " + formatMedium(date) + "."));
+    }
+  }
+
+  function refreshReminders() {
+    clearTimeout(remExactTimer);
+    setTimeout(function () { checkReminders("refresh"); }, 50);
+  }
+
+  /* ---------- Task reminder picker (bell) ---------- */
+  function openTaskReminder(id) {
+    const t = getTask(id);
+    if (!t) return;
+    const now = R.centralNow();
+    const isToday = t.date === now.date;
+    const chips = [];
+    if (t.time) {
+      chips.push({ label: "At task time (" + formatTime(t.time) + ")", value: t.time });
+      const before = R.addMinutesWall(t.date, t.time, -15);
+      if (before.date === t.date) chips.push({ label: "15 min before (" + formatTime(before.hhmm) + ")", value: before.hhmm });
+    }
+    if (isToday) {
+      [30, 60, 120].forEach(function (m) {
+        const w = R.centralNow(Date.now() + m * 60000);
+        if (w.date === t.date) chips.push({ label: "In " + (m < 60 ? m + " min" : (m / 60) + " hr"), value: w.hhmm });
+      });
+    }
+    if (!chips.length) chips.push({ label: "9:00 AM", value: "09:00" }, { label: "12:00 PM", value: "12:00" }, { label: "6:00 PM", value: "18:00" });
+    const preset = t.remindAt || (chips[0] && chips[0].value) || "";
+    openModal("Remind me",
+      '<p class="rem-task-name">' + escapeHtml(t.title) + '</p>' +
+      '<p class="hint">' + escapeHtml(dateLabel(t.date)) + " · " + escapeHtml(formatLong(t.date)) + "</p>" +
+      '<div class="pill-row rem-chips">' + chips.map(function (c) {
+        return '<button type="button" class="pill' + (c.value === preset ? " on" : "") + '" data-val="' + escapeHtml(c.value) + '">' + escapeHtml(c.label) + "</button>";
+      }).join("") + "</div>" +
+      '<label style="margin-top:12px"><span>Reminder time (Central)</span><input id="trTime" type="time" value="' + escapeHtml(preset) + '"></label>' +
+      (notifyPermission() === "default" ? '<p class="hint">Tip: tap <strong>Turn on alerts</strong> on the Reminders screen so this device can ping you.</p>' : ""),
+      [
+        { label: "Save reminder", cls: "primary", onClick: function () {
+          const v = document.getElementById("trTime").value;
+          if (!v) { document.getElementById("trTime").focus(); return; }
+          if ((t.date + "T" + v) < R.centralNow().wall) { toast("That time has already passed. Pick a later time."); return; }
+          updateTask(t.id, { remindAt: v, remindSetAt: nowStamp() });
+          closeModal();
+          render();
+          afterReminderSaved(t.date, v);
+          refreshReminders();
+        }},
+        { label: "📅 Add to my calendar", onClick: function () {
+          const v = document.getElementById("trTime").value || t.remindAt;
+          if (!v) { toast("Pick a reminder time first."); return; }
+          downloadICS([taskEvent(t, v)], "task-" + slug(t.title));
+        }},
+        t.remindAt ? { label: "Remove reminder", cls: "danger", onClick: function () {
+          updateTask(t.id, { remindAt: "", remindSetAt: "" });
+          closeModal();
+          render();
+          toast("Reminder removed.");
+          refreshReminders();
+        }} : null,
+        { label: "Cancel", cls: "ghost", onClick: closeModal }
+      ].filter(Boolean)
+    );
+    modalBody.querySelectorAll(".rem-chips .pill").forEach(function (b) {
+      b.addEventListener("click", function () {
+        document.getElementById("trTime").value = b.getAttribute("data-val");
+        modalBody.querySelectorAll(".rem-chips .pill").forEach(function (x) { x.classList.toggle("on", x === b); });
+      });
+    });
+  }
+
+  /* ---------- Calendar files ---------- */
+  function slug(s) {
+    return String(s || "reminder").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "reminder";
+  }
+  function reminderEvent(rem) {
+    const now = R.centralNow();
+    const date = R.nextDate(rem, now.date, now.wall);
+    const desc = rem.kind === "plan" ? "Open My Daily Journal and plan today's tasks."
+      : rem.kind === "check" ? "Open My Daily Journal and check off what you finished."
+      : (rem.note || "Reminder from My Daily Journal.");
+    return { uid: "dj-" + rem.id, title: rem.label || "Reminder", description: desc + "\n" + APP_URL, url: APP_URL, date: date, time: rem.time, repeat: true, days: rem.days || [] };
+  }
+  function taskEvent(t, hhmm) {
+    return { uid: "dj-task-" + t.id, title: t.title, description: "Task reminder from My Daily Journal.\n" + APP_URL, url: APP_URL, date: t.date, time: hhmm || t.remindAt, repeat: false };
+  }
+  function downloadICS(events, name) {
+    if (!events.length) { toast("There is nothing to add yet. Turn on a reminder first."); return; }
+    const text = R.buildICS(events);
+    const blob = new Blob([text], { type: "text/calendar;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "daily-journal-" + name + ".ics";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+    toast("Calendar file downloaded. Open it to add the alert to your calendar.");
+  }
+
+  /* ---------- Reminders screen ---------- */
+  function renderReminders() {
+    renderReminderPerm();
+    renderReminderLists();
+  }
+
+  function renderReminderPerm() {
+    const box = document.getElementById("remPermBody");
+    if (!box) return;
+    const p = notifyPermission();
+    let html = "";
+    if (p === "granted") {
+      html += '<p class="sync-status ok">✓ Alerts are on for this device</p>' +
+        '<p class="hint">Your device will show a pop-up alert at each reminder time while this app or your browser is running.</p>';
+    } else if (p === "denied") {
+      html += '<p class="sync-status err">Alerts are blocked on this device</p>' +
+        '<p class="hint">To allow them, tap the lock or settings icon next to the web address, choose <strong>Notifications</strong>, then <strong>Allow</strong>, and reload. Until then you will still see the banner and hear the chime while the app is open, and calendar alerts always work.</p>';
+    } else if (p === "unsupported") {
+      html += '<p class="sync-status warn">This browser cannot show pop-up alerts</p>' +
+        '<p class="hint">You will still see the banner and hear the chime while the app is open. Use <strong>Add to my calendar</strong> for alerts that always ring. On iPhone or iPad, add the app to your Home Screen first.</p>';
+    } else {
+      html += '<p class="sync-status warn">Alerts are not on yet</p>' +
+        '<p class="hint">Tap the button and choose <strong>Allow</strong> when your browser asks.</p>';
+    }
+    html += '<div class="btn-row">';
+    if (p === "default") html += '<button type="button" class="btn primary big" id="remAllowBtn">' + BELL_SVG + " Turn on alerts</button>";
+    html += '<button type="button" class="btn big" id="remTestBtn">Send a test alert</button>';
+    html += "</div>";
+    html += '<div class="rem-row sound-row"><div class="grow"><strong>Chime sound</strong><div class="sched">A soft chime plays with the banner while the app is open.</div></div>' +
+      '<button type="button" class="switch" id="remMuteSwitch" role="switch" aria-checked="' + (isMuted() ? "false" : "true") + '" aria-label="Chime sound"><span></span></button></div>';
+    const extras = [];
+    if (triggersSupported()) extras.push("scheduled alerts");
+    if ("serviceWorker" in navigator && "periodicSync" in ServiceWorkerRegistration.prototype) extras.push("background checks when installed");
+    if (extras.length) html += '<p class="hint small">This browser also supports ' + escapeHtml(extras.join(" and ")) + ", which can help alerts ring when the app is closed.</p>";
+    box.innerHTML = html;
+    const allow = document.getElementById("remAllowBtn");
+    if (allow) allow.addEventListener("click", requestAlerts);
+    document.getElementById("remTestBtn").addEventListener("click", sendTestAlert);
+    document.getElementById("remMuteSwitch").addEventListener("click", function () {
+      setMuted(!isMuted());
+      R.unlockAudio();
+      if (!isMuted()) R.chime();
+      renderReminderPerm();
+    });
+  }
+
+  function reminderRowHTML(rem) {
+    const icon = rem.kind === "plan" ? "☀" : rem.kind === "check" ? "✓" : "★";
+    const sched = R.daysLabel(rem.days) + " at " + formatTime(rem.time);
+    return '<div class="rem-item" data-rem="' + escapeHtml(rem.id) + '">' +
+      '<div class="rem-row">' +
+        '<span class="rem-ic ' + escapeHtml(rem.kind || "custom") + '" aria-hidden="true">' + icon + "</span>" +
+        '<div class="grow"><strong>' + escapeHtml(rem.label) + "</strong>" +
+          '<div class="sched">' + escapeHtml(sched) + (rem.enabled ? "" : " · off") + "</div></div>" +
+        '<input type="time" class="rem-time" value="' + escapeHtml(rem.time) + '" aria-label="Time for ' + escapeHtml(rem.label) + '">' +
+        '<button type="button" class="switch rem-switch" role="switch" aria-checked="' + (rem.enabled ? "true" : "false") + '" aria-label="' + escapeHtml(rem.label) + ' on or off"><span></span></button>' +
+      "</div>" +
+      '<div class="rem-cal-row">' +
+        '<button type="button" class="btn small rem-ics">📅 Add to my calendar</button>' +
+        '<a class="btn small ghost" target="_blank" rel="noopener noreferrer" href="' + escapeHtml(R.googleCalendarUrl(reminderEvent(rem))) + '">Google Calendar</a>' +
+        (rem.kind === "custom" ? '<button type="button" class="btn small ghost rem-edit">Edit</button>' : "") +
+      "</div>" +
+    "</div>";
+  }
+
+  function renderReminderLists() {
+    const daily = document.getElementById("remDailyList");
+    if (!daily) return;
+    const builtins = BUILTIN_REMINDERS.map(function (b) { return reminderById(b.id); }).filter(Boolean);
+    const custom = (state.reminders || []).filter(function (r) { return r && r.kind === "custom"; })
+      .sort(function (a, b) { return (a.time || "").localeCompare(b.time || ""); });
+    daily.innerHTML = builtins.map(reminderRowHTML).join("");
+    const cl = document.getElementById("remCustomList");
+    cl.innerHTML = custom.length ? custom.map(reminderRowHTML).join("")
+      : '<p class="hint">No custom reminders yet. Add one for things like your blood pressure check, Sabbath prep, or a trading session.</p>';
+    [daily, cl].forEach(bindReminderRows);
+
+    const tl = document.getElementById("remTaskList");
+    const today = todayISO();
+    const tasks = state.tasks.filter(function (t) { return !t.done && t.remindAt && t.date >= today; })
+      .sort(function (a, b) { return (a.date + a.remindAt).localeCompare(b.date + b.remindAt); }).slice(0, 30);
+    tl.innerHTML = tasks.length ? tasks.map(function (t) {
+      return '<div class="rem-item" data-tid="' + escapeHtml(t.id) + '"><div class="rem-row">' +
+        '<span class="rem-ic task" aria-hidden="true">' + BELL_SVG + "</span>" +
+        '<div class="grow"><strong>' + escapeHtml(t.title) + "</strong>" +
+        '<div class="sched">' + escapeHtml(dateLabel(t.date)) + " at " + escapeHtml(formatTime(t.remindAt)) + "</div></div></div>" +
+        '<div class="rem-cal-row"><button type="button" class="btn small rem-task-ics">📅 Add to my calendar</button>' +
+        '<button type="button" class="btn small ghost rem-task-edit">Change</button>' +
+        '<button type="button" class="btn small ghost rem-task-del">Remove</button></div></div>';
+    }).join("") : '<p class="hint">No task reminders yet. Tap the bell on any task on the Today screen to add one.</p>';
+    tl.querySelectorAll("[data-tid]").forEach(function (row) {
+      const id = row.getAttribute("data-tid");
+      row.querySelector(".rem-task-ics").addEventListener("click", function () {
+        const t = getTask(id); if (t) downloadICS([taskEvent(t)], "task-" + slug(t.title));
+      });
+      row.querySelector(".rem-task-edit").addEventListener("click", function () { openTaskReminder(id); });
+      row.querySelector(".rem-task-del").addEventListener("click", function () {
+        updateTask(id, { remindAt: "", remindSetAt: "" });
+        toast("Reminder removed.");
+        renderReminderLists();
+        refreshReminders();
+      });
+    });
+
+    const nx = document.getElementById("remNextLine");
+    const next = upcoming(7 * 24)[0];
+    nx.textContent = next ? ("Next alert: " + next.title.replace(/^⏰ /, "") + " — " + dateLabel(next.date) + " at " + formatTime(next.time) + " (Central)")
+      : "No alerts are scheduled. Turn on a reminder below.";
+  }
+
+  function bindReminderRows(root) {
+    root.querySelectorAll(".rem-item[data-rem]").forEach(function (row) {
+      const id = row.getAttribute("data-rem");
+      row.querySelector(".rem-switch").addEventListener("click", function () {
+        const rem = reminderById(id);
+        if (!rem) return;
+        rem.enabled = !rem.enabled;
+        touch(rem);
+        persist();
+        renderReminderLists();
+        if (rem.enabled) afterReminderSaved(R.nextDate(rem, todayISO(), R.centralNow().wall), rem.time);
+        refreshReminders();
+      });
+      row.querySelector(".rem-time").addEventListener("change", function (e) {
+        const rem = reminderById(id);
+        const v = e.target.value;
+        if (!rem || !v) return;
+        rem.time = v;
+        if (!rem.enabled) rem.enabled = true;
+        touch(rem);
+        persist();
+        renderReminderLists();
+        afterReminderSaved(R.nextDate(rem, todayISO(), R.centralNow().wall), v);
+        refreshReminders();
+      });
+      row.querySelector(".rem-ics").addEventListener("click", function () {
+        const rem = reminderById(id);
+        if (rem) downloadICS([reminderEvent(rem)], slug(rem.label));
+      });
+      const ed = row.querySelector(".rem-edit");
+      if (ed) ed.addEventListener("click", function () { openReminderEditor(id); });
+    });
+  }
+
+  function openReminderEditor(id) {
+    const rem = id ? reminderById(id) : null;
+    const days = rem ? (rem.days || []) : [];
+    openModal(rem ? "Edit reminder" : "Add a reminder",
+      '<label><span>What should I remind you about?</span><input id="reLabel" type="text" maxlength="80" placeholder="For example: Take blood pressure" value="' + escapeHtml(rem ? rem.label : "") + '"></label>' +
+      '<label><span>Time (Central)</span><input id="reTime" type="time" value="' + escapeHtml(rem ? rem.time : "09:00") + '"></label>' +
+      '<div class="re-days"><span class="re-days-h">Days</span>' +
+        '<div class="pill-row" style="margin-bottom:8px"><button type="button" class="pill" data-preset="all">Every day</button>' +
+        '<button type="button" class="pill" data-preset="wk">Weekdays</button><button type="button" class="pill" data-preset="we">Weekends</button></div>' +
+        "<div>" + weekdayChecks(days.length ? days : [0, 1, 2, 3, 4, 5, 6]) + "</div></div>" +
+      '<label><span>Note (optional)</span><input id="reNote" type="text" maxlength="140" value="' + escapeHtml(rem && rem.note ? rem.note : "") + '"></label>',
+      [
+        { label: "Save", cls: "primary", onClick: function () {
+          const label = document.getElementById("reLabel").value.trim();
+          const time = document.getElementById("reTime").value;
+          if (!label) { document.getElementById("reLabel").focus(); return; }
+          if (!time) { document.getElementById("reTime").focus(); return; }
+          let picked = Array.from(modalBody.querySelectorAll(".wd:checked")).map(function (x) { return Number(x.value); });
+          if (!picked.length) { toast("Choose at least one day."); return; }
+          if (picked.length === 7) picked = [];
+          const payload = { label: label, time: time, days: picked, note: document.getElementById("reNote").value.trim(), enabled: true, kind: "custom", updatedAt: nowStamp() };
+          if (rem) Object.assign(rem, payload);
+          else {
+            payload.id = uid();
+            payload.createdAt = nowStamp();
+            state.reminders.push(payload);
+            clearTomb("reminders", payload.id);
+          }
+          persist();
+          closeModal();
+          renderReminderLists();
+          const saved = rem || payload;
+          afterReminderSaved(R.nextDate(saved, todayISO(), R.centralNow().wall), time);
+          refreshReminders();
+        }},
+        { label: "Cancel", cls: "ghost", onClick: closeModal },
+        rem ? { label: "Delete", cls: "danger", onClick: function () {
+          if (!confirm("Delete this reminder?")) return;
+          state.reminders = state.reminders.filter(function (x) { return x.id !== rem.id; });
+          addTomb("reminders", rem.id);
+          persist();
+          closeModal();
+          renderReminderLists();
+          toast("Reminder deleted.");
+          refreshReminders();
+        }} : null
+      ].filter(Boolean)
+    );
+    modalBody.querySelectorAll("[data-preset]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        const p = b.getAttribute("data-preset");
+        const set = p === "all" ? [0, 1, 2, 3, 4, 5, 6] : p === "wk" ? [1, 2, 3, 4, 5] : [0, 6];
+        modalBody.querySelectorAll(".wd").forEach(function (cb) { cb.checked = set.indexOf(Number(cb.value)) !== -1; });
+      });
+    });
+  }
+
+  function addAllToCalendar() {
+    const events = (state.reminders || []).filter(function (r) { return r && r.enabled; }).map(reminderEvent);
+    const today = todayISO();
+    state.tasks.forEach(function (t) {
+      if (!t.done && t.remindAt && t.date >= today) events.push(taskEvent(t));
+    });
+    downloadICS(events, "all-reminders");
+  }
+
+  function bindReminders() {
+    document.getElementById("remAddBtn").addEventListener("click", function () { openReminderEditor(null); });
+    document.getElementById("remAllIcsBtn").addEventListener("click", addAllToCalendar);
+    document.addEventListener("pointerdown", function () { R.unlockAudio(); }, { once: true });
+    if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", onWorkerMessage);
+  }
+
+  function startReminders() {
+    handleLaunchAction();
+    clearInterval(remTimer);
+    remTimer = setInterval(function () { checkReminders("tick"); }, 30000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") checkReminders("focus");
+    });
+    if (notifyPermission() === "granted") registerPeriodic();
+    setTimeout(function () { checkReminders("open"); }, 600);
   }
 
 
@@ -1399,6 +2230,7 @@
     state.categories = merged.categories;
     state.tasks = merged.tasks;
     state.recurring = merged.recurring;
+    state.reminders = merged.reminders || state.reminders || [];
     state.journal = merged.journal;
     state.skipped = merged.skipped;
     state.badgesEarned = merged.badgesEarned;
@@ -1461,6 +2293,7 @@
           ensureInstancesForDate(todayISO());
           if (viewDate !== todayISO()) ensureInstancesForDate(viewDate);
           render();
+          refreshReminders();
         }
         const content = JSON.stringify(JournalSync.syncPayload(state), null, 2);
         if (!JournalSync.getGistId()) {
@@ -1701,6 +2534,7 @@
     else if (currentView === "journal") renderJournal();
     else if (currentView === "progress") renderProgress();
     else if (currentView === "sync") renderSync();
+    else if (currentView === "reminders") renderReminders();
     else renderMore();
   }
 
@@ -1756,10 +2590,14 @@
         categoryId: document.getElementById("taskCategory").value,
         priority: document.getElementById("taskPriority").value,
         time: document.getElementById("taskTime").value,
+        remindAt: document.getElementById("taskRemind").value,
         date: viewDate
       });
+      const addedRemind = document.getElementById("taskRemind").value;
       input.value = "";
       document.getElementById("taskTime").value = "";
+      document.getElementById("taskRemind").value = "";
+      if (addedRemind) { afterReminderSaved(viewDate, addedRemind); refreshReminders(); }
       input.focus();
       renderToday();
     });
@@ -1826,6 +2664,8 @@
   updateBadges();
   save();
   if (JournalSync.getToken()) runSync("open");
+  bindReminders();
+  startReminders();
 
   window.__dj = {
     todayISO: todayISO,
@@ -1835,6 +2675,8 @@
     mergeStates: JournalSync.mergeStates,
     runSync: function () { return runSync("manual"); },
     getSyncStatus: function () { return syncStatus; },
-    applyMergedState: applyMergedState
+    applyMergedState: applyMergedState,
+    checkReminders: function () { return checkReminders("manual"); },
+    reminderOccurrences: function (a, b) { return occurrencesBetween(a, b); }
   };
 })();
