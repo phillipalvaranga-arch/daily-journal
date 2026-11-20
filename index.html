@@ -56,6 +56,7 @@
       </div>
       <p class="jump-row"><button type="button" id="jumpTodayBtn" class="linkish" hidden>Back to today</button></p>
 
+      <div id="carryBanner" class="carry-banner" role="status" aria-live="polite" hidden></div>
       <div id="dailyStrip" class="stat-strip" aria-live="polite"></div>
 
       <form id="addForm" class="add-card" autocomplete="off">
@@ -207,6 +208,17 @@
         <div class="btn-row">
           <button type="button" id="openSyncBtn" class="btn primary">Open Sync</button>
         </div>
+      </div>
+
+      <div class="card" id="carryCard">
+        <h3>Unfinished tasks</h3>
+        <div class="rem-row">
+          <div class="grow"><strong>Carry unfinished tasks to the next day</strong>
+            <div class="sched">When a new day starts, any task you did not finish moves to today, with a "Carried from" label. Finished tasks stay on the day you finished them.</div>
+          </div>
+          <button type="button" class="switch" id="carrySwitch" role="switch" aria-checked="true" aria-label="Carry unfinished tasks to the next day"><span></span></button>
+        </div>
+        <p class="hint small">Repeating tasks are not carried, so they never pile up. A new one appears on each day it repeats. To keep one task from moving, open it and check "Don't carry this task".</p>
       </div>
 
       <div class="card">

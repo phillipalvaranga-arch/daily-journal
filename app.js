@@ -220,6 +220,7 @@
   }
 
   function save() {
+    carryIndex = null;
     try {
       localStorage.setItem(STORE, JSON.stringify(state));
     } catch (err) {
@@ -333,13 +334,30 @@
     });
   }
 
+  let carryIndex = null;
+  /* Days each unfinished task was carried away from. Those days keep counting it as not done,
+     so past completion rates and streaks stay exactly as they were. */
+  function carriedOutIndex() {
+    if (carryIndex) return carryIndex;
+    carryIndex = {};
+    state.tasks.forEach(function (t) {
+      if (!t || !Array.isArray(t.carriedDays)) return;
+      t.carriedDays.forEach(function (d) {
+        if (d && d !== t.date) carryIndex[d] = (carryIndex[d] || 0) + 1;
+      });
+    });
+    return carryIndex;
+  }
+
   function dayStats(iso) {
     const list = tasksForDate(iso);
-    const total = list.length;
+    const carriedOut = carriedOutIndex()[iso] || 0;
+    const carriedIn = list.filter(function (t) { return t.carriedFrom && t.carriedFrom < iso; }).length;
+    const total = list.length + carriedOut;
     const done = list.filter(function (t) { return t.done; }).length;
     const pct = total ? Math.round((done / total) * 100) : 0;
     const perfect = total > 0 && done === total;
-    return { total: total, done: done, pct: pct, perfect: perfect, hasTasks: total > 0 };
+    return { total: total, done: done, pct: pct, perfect: perfect, hasTasks: total > 0, carriedOut: carriedOut, carriedIn: carriedIn };
   }
 
   function isPerfectDay(iso) { return dayStats(iso).perfect; }
@@ -393,7 +411,8 @@
     const pct = total ? Math.round((done / total) * 100) : 0;
     const perfectDays = perDay.filter(function (s) { return s.perfect; }).length;
     const allSeven = perDay.every(function (s) { return s.perfect; });
-    return { days: days, perDay: perDay, total: total, done: done, pct: pct, best: best, perfectDays: perfectDays, allSeven: allSeven };
+    const carriedOut = perDay.reduce(function (n, s) { return n + (s.carriedOut || 0); }, 0);
+    return { days: days, perDay: perDay, total: total, done: done, pct: pct, best: best, perfectDays: perfectDays, allSeven: allSeven, carriedOut: carriedOut };
   }
 
   function monthStats(iso) {
@@ -403,9 +422,10 @@
     for (let d = start; d <= end; d = addDays(d, 1)) days.push(d);
     const perDay = days.map(function (d) { return Object.assign({ date: d }, dayStats(d)); });
     let total = 0, done = 0;
-    perDay.forEach(function (s) { total += s.total; done += s.done; });
+    let carriedOut = 0;
+    perDay.forEach(function (s) { total += s.total; done += s.done; carriedOut += s.carriedOut || 0; });
     const pct = total ? Math.round((done / total) * 100) : 0;
-    return { start: start, end: end, days: days, perDay: perDay, total: total, done: done, pct: pct };
+    return { start: start, end: end, days: days, perDay: perDay, total: total, done: done, pct: pct, carriedOut: carriedOut };
   }
 
   function categoryTotals(from, to) {
@@ -788,7 +808,17 @@
       meta += '<span class="badge ' + escapeHtml(t.priority) + '">' + label + "</span>";
     }
     if (t.time) meta += '<span class="badge time">' + escapeHtml(formatTime(t.time)) + "</span>";
-    if (t.remindAt && !t.done) meta += '<span class="badge remind">' + BELL_SVG + escapeHtml(formatTime(t.remindAt)) + "</span>";
+    if (t.remindAt && !t.done) {
+      const nowC = window.DJReminders ? window.DJReminders.centralNow() : null;
+      const isDue = nowC && (t.date + "T" + t.remindAt) <= nowC.wall;
+      meta += '<span class="badge remind' + (isDue ? " due" : "") + '">' + BELL_SVG +
+        (isDue ? "Due · " : "") + escapeHtml(formatTime(t.remindAt)) + "</span>";
+    }
+    if (t.carriedFrom && t.carriedFrom < t.date) {
+      const days = daysBetween(t.carriedFrom, t.date);
+      meta += '<span class="badge carried" title="First planned for ' + escapeHtml(formatLong(t.carriedFrom)) + '">↪ Carried from ' +
+        escapeHtml(formatMedium(t.carriedFrom)) + (days > 1 ? " · " + days + " days" : "") + "</span>";
+    }
     return (
       '<li class="task' + (t.done ? " done" : "") + '" data-id="' + escapeHtml(t.id) + '">' +
         '<button type="button" class="drag-handle" aria-label="Reorder ' + escapeHtml(t.title) + '" ' +
@@ -918,7 +948,10 @@
       '<label><span>Time</span><input id="edTime" type="time" value="' + escapeHtml(t.time || "") + '"></label>' +
       '<label><span>Date</span><input id="edDate" type="date" value="' + escapeHtml(t.date) + '"></label>' +
       '<label><span>Remind me at (optional)</span><input id="edRemind" type="time" value="' + escapeHtml(t.remindAt || "") + '"></label>' +
-      '<p class="hint">Leave the reminder blank for no alert. Alerts use Central Time.</p>',
+      '<p class="hint">Leave the reminder blank for no alert. Alerts use Central Time.</p>' +
+      (t.recurringId
+        ? '<p class="hint">Repeating tasks are not carried over. A new one appears on each day it repeats.</p>'
+        : '<label class="check-line"><input id="edNoCarry" type="checkbox"' + (t.noCarry ? " checked" : "") + "> Don't carry this task to the next day if it's unfinished</label>"),
       [
         { label: "Save", cls: "primary", onClick: function () {
           const title = document.getElementById("edTitle").value.trim();
@@ -932,6 +965,8 @@
             time: document.getElementById("edTime").value,
             date: date
           };
+          const noCarryEl = document.getElementById("edNoCarry");
+          if (noCarryEl && !!noCarryEl.checked !== !!t.noCarry) patch.noCarry = !!noCarryEl.checked;
           if (remindAt !== (t.remindAt || "") || date !== t.date) {
             patch.remindAt = remindAt;
             patch.remindSetAt = remindAt ? nowStamp() : "";
@@ -955,6 +990,7 @@
     document.getElementById("todayDate").textContent = formatLong(viewDate);
     document.getElementById("jumpTodayBtn").hidden = viewDate === t;
     ensureInstancesForDate(viewDate);
+    renderCarryBanner();
     renderDailyStrip();
     renderSuggestions();
     renderTasks();
@@ -1140,6 +1176,7 @@
           metricHTML(s.done, s.done === 1 ? "Task done" : "Tasks done") +
           metricHTML(streak, "Day streak") +
         "</div>" +
+        carryLineHTML(s) +
         '<p class="hint">A streak counts consecutive days when every task on the list was finished. Today only counts once the day is complete.</p>';
       document.getElementById("pPrev").addEventListener("click", function () { progressCursor = addDays(progressCursor, -1); renderProgress(); });
       document.getElementById("pNext").addEventListener("click", function () { progressCursor = addDays(progressCursor, 1); renderProgress(); });
@@ -1169,6 +1206,7 @@
         "</div>" +
         '<p class="growth-line" id="weekGrowth">' + escapeHtml(growthSentence(progressCursor)) +
           (rateSentence(progressCursor) ? " " + escapeHtml(rateSentence(progressCursor)) : "") + "</p>" +
+        (ws.carriedOut ? '<p class="carry-stat">↪ ' + ws.carriedOut + " unfinished task" + (ws.carriedOut === 1 ? " was" : "s were") + " carried over to a later day this week. They count as not done on the day they were left.</p>" : "") +
         '<div class="card chart-card"><h3>Tasks finished by day</h3>' + barChart(ws.perDay) +
         '<p class="hint">Short gray marks are days with no tasks. Weeks run Sunday through Saturday, Central Time.</p></div>';
       document.getElementById("pPrev").addEventListener("click", function () { progressCursor = addDays(weekStart(progressCursor), -1); renderProgress(); });
@@ -1257,6 +1295,7 @@
 
   function renderMore() {
     renderSyncSummary();
+    renderCarrySetting();
     const list = document.getElementById("recurringList");
     if (!state.recurring.length) {
       list.innerHTML = "<p class='hint'>You have no repeating tasks yet.</p>";
@@ -2190,6 +2229,160 @@
   }
 
 
+  /* ===================== Carry unfinished tasks forward ===================== */
+  const CARRY_LAST_KEY = "dj-carry-last";
+  let carryDay = todayISO();
+
+  function daysBetween(a, b) {
+    const pa = a.split("-").map(Number);
+    const pb = b.split("-").map(Number);
+    return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 86400000);
+  }
+  function carryEnabled() { return !state.settings || state.settings.carryOver !== false; }
+
+  /* Moves every unfinished one-time task from an earlier day to today by changing its date
+     (same task id, so sync never makes copies). Repeating tasks and "don't carry" tasks stay put. */
+  function carryOverTasks(reason) {
+    if (!carryEnabled()) return [];
+    const today = todayISO();
+    const moved = [];
+    state.tasks.forEach(function (t) {
+      if (!t || t.done || t.recurringId || t.noCarry) return;
+      if (!t.date || t.date >= today) return;
+      if (t.carryDeclined && t.carryDeclined >= today) return;
+      const from = t.date;
+      moved.push({
+        id: t.id, from: from, order: t.order,
+        carriedFrom: t.carriedFrom || "", carriedDays: Array.isArray(t.carriedDays) ? t.carriedDays.slice() : [],
+        carryCount: t.carryCount || 0, remindSetAt: t.remindSetAt || ""
+      });
+      if (!t.carriedFrom) t.carriedFrom = from;
+      const daysList = Array.isArray(t.carriedDays) ? t.carriedDays.slice() : [];
+      if (daysList.indexOf(from) === -1) daysList.push(from);
+      t.carriedDays = daysList;
+      t.carryCount = daysList.length;
+      t.date = today;
+      t.order = nextOrder(today);
+      // Re-arm the reminder for today. If its time already passed it shows as "Due" with no alert burst.
+      if (t.remindAt) t.remindSetAt = nowStamp();
+      delete t.carryDeclined;
+      touch(t);
+    });
+    if (!moved.length) return moved;
+    persist();
+    const last = readJSON(CARRY_LAST_KEY, null);
+    const batch = (last && last.date === today && !last.undone) ? last : { date: today, items: [], dismissed: false };
+    batch.items = batch.items.concat(moved);
+    batch.dismissed = false;
+    batch.at = nowStamp();
+    batch.reason = reason || "";
+    writeJSON(CARRY_LAST_KEY, batch);
+    return moved;
+  }
+
+  function undoCarry() {
+    const batch = readJSON(CARRY_LAST_KEY, null);
+    const today = todayISO();
+    if (!batch || batch.date !== today) return 0;
+    let n = 0;
+    batch.items.forEach(function (it) {
+      const t = getTask(it.id);
+      if (!t || t.done || t.date !== today) return;
+      t.date = it.from;
+      t.order = it.order;
+      if (it.carriedFrom) t.carriedFrom = it.carriedFrom; else delete t.carriedFrom;
+      if (it.carriedDays.length) t.carriedDays = it.carriedDays; else delete t.carriedDays;
+      if (it.carryCount) t.carryCount = it.carryCount; else delete t.carryCount;
+      t.remindSetAt = it.remindSetAt;
+      t.carryDeclined = today; // stays on its day until tomorrow, on every synced device
+      touch(t);
+      n++;
+    });
+    batch.undone = true;
+    batch.dismissed = true;
+    writeJSON(CARRY_LAST_KEY, batch);
+    persist();
+    refreshReminders();
+    return n;
+  }
+
+  function renderCarryBanner() {
+    const el = document.getElementById("carryBanner");
+    if (!el) return;
+    const batch = readJSON(CARRY_LAST_KEY, null);
+    const today = todayISO();
+    const live = batch && batch.date === today && !batch.dismissed && !batch.undone && viewDate === today
+      ? batch.items.filter(function (it) { const t = getTask(it.id); return t && t.date === today; }) : [];
+    if (!live.length) { el.hidden = true; el.innerHTML = ""; return; }
+    const froms = live.map(function (it) { return it.from; }).sort();
+    const oldest = froms[0];
+    const newest = froms[froms.length - 1];
+    const fromTxt = oldest === newest ? "From " + formatMedium(oldest) + "." : "From " + formatMedium(oldest) + " to " + formatMedium(newest) + ".";
+    el.innerHTML =
+      '<span class="cb-ic" aria-hidden="true">↪</span>' +
+      '<div class="cb-text"><strong>' + live.length + " unfinished task" + (live.length === 1 ? "" : "s") + " moved to today</strong>" +
+      "<span>" + escapeHtml(fromTxt) + " Finish them today, or tap a task to change it.</span></div>" +
+      '<div class="cb-actions"><button type="button" class="btn" id="carryUndoBtn">Undo</button>' +
+      '<button type="button" class="btn ghost" id="carryOkBtn">Got it</button></div>';
+    el.hidden = false;
+    document.getElementById("carryUndoBtn").addEventListener("click", function () {
+      const n = undoCarry();
+      toast(n ? (n === 1 ? "Moved back to its day." : n + " tasks moved back to their days.") : "Nothing to undo.");
+      render();
+    });
+    document.getElementById("carryOkBtn").addEventListener("click", function () {
+      const b = readJSON(CARRY_LAST_KEY, null);
+      if (b) { b.dismissed = true; writeJSON(CARRY_LAST_KEY, b); }
+      el.hidden = true;
+    });
+  }
+
+  function carryLineHTML(s) {
+    const bits = [];
+    if (s.carriedOut) bits.push(s.carriedOut + " unfinished task" + (s.carriedOut === 1 ? " was" : "s were") + " carried over to a later day");
+    if (s.carriedIn) bits.push(s.carriedIn + " task" + (s.carriedIn === 1 ? " was" : "s were") + " carried in from earlier days");
+    return bits.length ? '<p class="carry-stat">↪ ' + escapeHtml(bits.join(". ")) + ".</p>" : "";
+  }
+
+  function checkDayChange() {
+    const t = todayISO();
+    if (t === carryDay) return;
+    const prev = carryDay;
+    carryDay = t;
+    if (viewDate === prev) viewDate = t;
+    if (progressCursor === prev) progressCursor = t;
+    ensureInstancesForDate(t);
+    carryOverTasks("new-day");
+    render();
+  }
+
+  function renderCarrySetting() {
+    const sw = document.getElementById("carrySwitch");
+    if (sw) sw.setAttribute("aria-checked", carryEnabled() ? "true" : "false");
+  }
+
+  function bindCarry() {
+    document.getElementById("carrySwitch").addEventListener("click", function () {
+      const on = !carryEnabled();
+      state.settings.carryOver = on;
+      state.settingsTimes.carryOver = nowStamp();
+      persist();
+      renderCarrySetting();
+      if (on) {
+        const moved = carryOverTasks("setting");
+        toast(moved.length ? (moved.length + " unfinished task" + (moved.length === 1 ? "" : "s") + " moved to today.") : "On. Unfinished tasks will move to the next day.");
+      } else {
+        toast("Off. Unfinished tasks will stay on their own day.");
+      }
+    });
+    setInterval(checkDayChange, 30000);
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState === "visible") checkDayChange();
+    });
+    window.addEventListener("focus", checkDayChange);
+  }
+
+
   let pushTimer = 0;
   let pullTimer = 0;
   let syncing = false;
@@ -2237,6 +2430,7 @@
     state.settings = merged.settings;
     state.settingsTimes = merged.settingsTimes;
     state.tombstones = merged.tombstones;
+    carryIndex = null;
     state.version = 2;
     state.demo = demo;
   }
@@ -2292,6 +2486,7 @@
           persist({ skipPush: true });
           ensureInstancesForDate(todayISO());
           if (viewDate !== todayISO()) ensureInstancesForDate(viewDate);
+          carryOverTasks("sync");
           render();
           refreshReminders();
         }
@@ -2665,7 +2860,10 @@
   save();
   if (JournalSync.getToken()) runSync("open");
   bindReminders();
+  bindCarry();
+  carryOverTasks("open");
   startReminders();
+  render();
 
   window.__dj = {
     todayISO: todayISO,
@@ -2677,6 +2875,8 @@
     getSyncStatus: function () { return syncStatus; },
     applyMergedState: applyMergedState,
     checkReminders: function () { return checkReminders("manual"); },
+    carryOverTasks: function () { return carryOverTasks("manual"); },
+    weekStats: weekStats,
     reminderOccurrences: function (a, b) { return occurrencesBetween(a, b); }
   };
 })();
