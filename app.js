@@ -832,6 +832,9 @@
           '<span class="task-title">' + escapeHtml(t.title) + "</span>" +
           (meta ? '<div class="task-meta">' + meta + "</div>" : "") + note +
         "</button>" +
+        '<button type="button" class="task-resolve' + (t.done ? " on" : "") + '" aria-pressed="' + (t.done ? "true" : "false") + '" aria-label="' +
+          (t.done ? "Resolved. Tap to mark not resolved: " : "Not resolved. Tap to mark resolved: ") + escapeHtml(t.title) + '">' +
+          (t.done ? "✅ Resolved" : "Not resolved") + "</button>" +
         '<button type="button" class="task-edit" aria-label="Edit ' + escapeHtml(t.title) + '" title="Edit">✏️<span>Edit</span></button>' +
         (t.done ? '<span class="task-bell-gap"></span>' :
           '<button type="button" class="task-bell' + (t.remindAt ? " on" : "") + '" aria-label="' +
@@ -848,7 +851,7 @@
     const wrap = document.getElementById("taskLists");
     let html = "";
     html += '<div class="list-h"><h3>To do</h3><span class="count">' + open.length + "</span></div>";
-    if (list.length) html += '<p class="edit-hint">Tap ✏️ Edit (or the task name) to change a task.</p>';
+    if (list.length) html += '<p class="edit-hint">Tap <strong>Not resolved</strong> when a task is done. Tap ✏️ Edit (or the task name) to change it.</p>';
     if (!open.length) {
       html += '<p class="empty" id="emptyOpen">Nothing on your list yet. Add a task above to start the day.</p>';
     } else {
@@ -877,6 +880,27 @@
           btn.setAttribute("aria-pressed", "true");
           setTimeout(function () { renderToday(); }, 420);
         } else {
+          renderToday();
+        }
+      });
+    });
+    root.querySelectorAll(".task-resolve").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        const li = btn.closest(".task");
+        const id = li.getAttribute("data-id");
+        const wasDone = li.classList.contains("done");
+        toggleTask(id);
+        refreshReminders();
+        if (!wasDone) {
+          li.classList.add("done");
+          btn.classList.add("on");
+          btn.textContent = "✅ Resolved";
+          btn.setAttribute("aria-pressed", "true");
+          toast("Marked resolved. Nice work!");
+          setTimeout(function () { renderToday(); }, 420);
+        } else {
+          toast("Marked not resolved.");
           renderToday();
         }
       });
