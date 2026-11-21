@@ -615,6 +615,7 @@
     const t = getTask(id);
     if (!t || t.done) return;
     const next = addDays(t.date, 1);
+    if (t.recurringId) markSkipped(t.recurringId, t.date);
     t.date = next;
     t.order = nextOrder(next);
     touch(t);
@@ -819,6 +820,8 @@
       meta += '<span class="badge carried" title="First planned for ' + escapeHtml(formatLong(t.carriedFrom)) + '">↪ Carried from ' +
         escapeHtml(formatMedium(t.carriedFrom)) + (days > 1 ? " · " + days + " days" : "") + "</span>";
     }
+    if (t.recurringId) meta += '<span class="badge repeat">🔁 Repeats</span>';
+    const note = t.notes ? '<span class="task-note">📝 ' + escapeHtml(t.notes.length > 90 ? t.notes.slice(0, 90) + "…" : t.notes) + "</span>" : "";
     return (
       '<li class="task' + (t.done ? " done" : "") + '" data-id="' + escapeHtml(t.id) + '">' +
         '<button type="button" class="drag-handle" aria-label="Reorder ' + escapeHtml(t.title) + '" ' +
@@ -827,8 +830,9 @@
           (t.done ? "Mark not done: " : "Mark done: ") + escapeHtml(t.title) + '"><span class="box">&#10003;</span></button>' +
         '<button type="button" class="task-body" aria-label="Edit ' + escapeHtml(t.title) + '">' +
           '<span class="task-title">' + escapeHtml(t.title) + "</span>" +
-          (meta ? '<div class="task-meta">' + meta + "</div>" : "") +
+          (meta ? '<div class="task-meta">' + meta + "</div>" : "") + note +
         "</button>" +
+        '<button type="button" class="task-edit" aria-label="Edit ' + escapeHtml(t.title) + '" title="Edit">✏️<span>Edit</span></button>' +
         (t.done ? '<span class="task-bell-gap"></span>' :
           '<button type="button" class="task-bell' + (t.remindAt ? " on" : "") + '" aria-label="' +
             (t.remindAt ? "Reminder at " + escapeHtml(formatTime(t.remindAt)) + ". Change reminder for " : "Set a reminder for ") +
@@ -844,6 +848,7 @@
     const wrap = document.getElementById("taskLists");
     let html = "";
     html += '<div class="list-h"><h3>To do</h3><span class="count">' + open.length + "</span></div>";
+    if (list.length) html += '<p class="edit-hint">Tap ✏️ Edit (or the task name) to change a task.</p>';
     if (!open.length) {
       html += '<p class="empty" id="emptyOpen">Nothing on your list yet. Add a task above to start the day.</p>';
     } else {
@@ -874,6 +879,12 @@
         } else {
           renderToday();
         }
+      });
+    });
+    root.querySelectorAll(".task-edit").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        openEditTask(btn.closest(".task").getAttribute("data-id"));
       });
     });
     root.querySelectorAll(".task-bell").forEach(function (btn) {
@@ -932,55 +943,228 @@
     }
   }
 
+  function markSkipped(rid, iso) {
+    if (!rid || !iso) return;
+    if (!state.skipped[rid]) state.skipped[rid] = {};
+    state.skipped[rid][iso] = { value: true, updatedAt: nowStamp() };
+  }
+
+  function repeatFieldsHTML(rule, date) {
+    const type = rule ? rule.type : "none";
+    const opt = function (v, label) { return '<option value="' + v + '"' + (type === v ? " selected" : "") + ">" + label + "</option>"; };
+    const wd = rule && rule.type === "weekly" && rule.weekdays && rule.weekdays.length ? rule.weekdays : [weekday(date)];
+    const md = rule && rule.monthDay ? rule.monthDay : Number(date.slice(8, 10));
+    return '<label><span>Repeat</span><select id="edRepeat">' +
+        opt("none", "Does not repeat") + opt("daily", "Every day") + opt("weekdays", "Weekdays (Mon–Fri)") +
+        opt("weekly", "Weekly on chosen days") + opt("monthly", "Monthly on a day of the month") +
+      "</select></label>" +
+      '<div id="edWeekly"' + (type === "weekly" ? "" : " hidden") + '><span class="re-days-h">Days</span><div class="re-days">' + weekdayChecks(wd) + "</div></div>" +
+      '<label id="edMonthly"' + (type === "monthly" ? "" : " hidden") + '><span>Day of month</span><input id="edMonthDay" type="number" min="1" max="31" value="' + md + '"></label>';
+  }
+
   function openEditTask(id) {
     const t = getTask(id);
     if (!t) return;
+    const rule = t.recurringId ? state.recurring.find(function (r) { return r.id === t.recurringId; }) || null : null;
     const moveLabel = t.date === todayISO() ? "Move to tomorrow" : "Move to next day";
-    openModal("Edit task",
+    const priOpt = function (v, label) { return '<option value="' + v + '"' + ((t.priority || "") === v ? " selected" : "") + ">" + label + "</option>"; };
+    let info = "";
+    if (rule) info += '<p class="edit-info">🔁 Repeating task · ' + escapeHtml(scheduleLabel(rule)) + "</p>";
+    if (t.carriedFrom && t.carriedFrom < t.date) info += '<p class="edit-info carried">↪ Carried from ' + escapeHtml(formatMedium(t.carriedFrom)) + "</p>";
+    openModal("✏️ Edit task",
+      info +
       '<label><span>Task</span><input id="edTitle" type="text" maxlength="200" value="' + escapeHtml(t.title) + '"></label>' +
-      '<label><span>Category</span><select id="edCat">' + categorySelectHTML(t.categoryId || "", true) + "</select></label>" +
-      '<label><span>Priority</span><select id="edPri">' +
-        '<option value="">None</option>' +
-        '<option value="high"' + (t.priority === "high" ? " selected" : "") + ">High</option>" +
-        '<option value="medium"' + (t.priority === "medium" ? " selected" : "") + ">Medium</option>" +
-        '<option value="low"' + (t.priority === "low" ? " selected" : "") + ">Low</option>" +
-      "</select></label>" +
-      '<label><span>Time</span><input id="edTime" type="time" value="' + escapeHtml(t.time || "") + '"></label>' +
-      '<label><span>Date</span><input id="edDate" type="date" value="' + escapeHtml(t.date) + '"></label>' +
-      '<label><span>Remind me at (optional)</span><input id="edRemind" type="time" value="' + escapeHtml(t.remindAt || "") + '"></label>' +
+      '<label><span>Notes (optional)</span><textarea id="edNotes" rows="2" maxlength="1000" placeholder="Details, phone number, address…">' + escapeHtml(t.notes || "") + "</textarea></label>" +
+      '<div class="edit-grid">' +
+        '<label><span>Category</span><select id="edCat">' + categorySelectHTML(t.categoryId || "", true) + "</select></label>" +
+        '<label><span>Priority</span><select id="edPri">' + priOpt("", "None") + priOpt("high", "High") + priOpt("medium", "Medium") + priOpt("low", "Low") + "</select></label>" +
+        '<label><span>Time</span><input id="edTime" type="time" value="' + escapeHtml(t.time || "") + '"></label>' +
+        '<label><span>Date</span><input id="edDate" type="date" value="' + escapeHtml(t.date) + '"></label>' +
+      "</div>" +
+      '<label><span>🔔 Remind me at (optional)</span><input id="edRemind" type="time" value="' + escapeHtml(t.remindAt || "") + '"></label>' +
       '<p class="hint">Leave the reminder blank for no alert. Alerts use Central Time.</p>' +
-      (t.recurringId
+      repeatFieldsHTML(rule, t.date) +
+      (rule
         ? '<p class="hint">Repeating tasks are not carried over. A new one appears on each day it repeats.</p>'
-        : '<label class="check-line"><input id="edNoCarry" type="checkbox"' + (t.noCarry ? " checked" : "") + "> Don't carry this task to the next day if it's unfinished</label>"),
+        : '<label class="check-line" id="edNoCarryWrap"><input id="edNoCarry" type="checkbox"' + (t.noCarry ? " checked" : "") + "> Don't carry this task to the next day if it's unfinished</label>"),
       [
-        { label: "Save", cls: "primary", onClick: function () {
-          const title = document.getElementById("edTitle").value.trim();
-          if (!title) { document.getElementById("edTitle").focus(); return; }
-          const date = document.getElementById("edDate").value || t.date;
-          const remindAt = document.getElementById("edRemind").value || "";
-          const patch = {
-            title: title,
-            categoryId: document.getElementById("edCat").value,
-            priority: document.getElementById("edPri").value,
-            time: document.getElementById("edTime").value,
-            date: date
-          };
-          const noCarryEl = document.getElementById("edNoCarry");
-          if (noCarryEl && !!noCarryEl.checked !== !!t.noCarry) patch.noCarry = !!noCarryEl.checked;
-          if (remindAt !== (t.remindAt || "") || date !== t.date) {
-            patch.remindAt = remindAt;
-            patch.remindSetAt = remindAt ? nowStamp() : "";
-          }
-          updateTask(t.id, patch);
-          if (patch.remindAt) afterReminderSaved(date, remindAt);
-          refreshReminders();
-          closeModal();
-          render();
-        }},
+        { label: "Save changes", cls: "primary", onClick: function () { saveEdit(t, rule); } },
         { label: "Cancel", cls: "ghost", onClick: closeModal },
         !t.done ? { label: moveLabel, onClick: function () { moveToTomorrow(t.id); closeModal(); render(); } } : null,
-        { label: "Delete", cls: "danger", onClick: function () { closeModal(); deleteTask(t.id, !!t.recurringId); render(); } }
+        { label: "Delete", cls: "danger", onClick: function () { confirmDelete(t, rule); } }
       ].filter(Boolean)
+    );
+    const sel = document.getElementById("edRepeat");
+    sel.addEventListener("change", function () {
+      document.getElementById("edWeekly").hidden = sel.value !== "weekly";
+      document.getElementById("edMonthly").hidden = sel.value !== "monthly";
+    });
+  }
+
+  function readEditForm(t) {
+    const title = document.getElementById("edTitle").value.trim();
+    const type = document.getElementById("edRepeat").value;
+    const weekdays = Array.from(modalBody.querySelectorAll(".wd:checked")).map(function (x) { return Number(x.value); });
+    const noCarryEl = document.getElementById("edNoCarry");
+    return {
+      title: title,
+      notes: document.getElementById("edNotes").value.trim(),
+      categoryId: document.getElementById("edCat").value,
+      priority: document.getElementById("edPri").value,
+      time: document.getElementById("edTime").value,
+      date: document.getElementById("edDate").value || t.date,
+      remindAt: document.getElementById("edRemind").value || "",
+      noCarry: noCarryEl ? !!noCarryEl.checked : !!t.noCarry,
+      repeat: { type: type, weekdays: type === "weekly" ? weekdays : [], monthDay: Number(document.getElementById("edMonthDay").value || 1) }
+    };
+  }
+
+  const SERIES_FIELDS = ["title", "categoryId", "priority", "time", "remindAt"];
+
+  /* Changes that only belong to this one task (never asked about). */
+  function applyThisTask(t, f) {
+    const patch = {};
+    SERIES_FIELDS.concat(["notes", "date"]).forEach(function (k) {
+      if ((t[k] || "") !== (f[k] || "")) patch[k] = f[k];
+    });
+    if (!t.recurringId && !!t.noCarry !== f.noCarry) patch.noCarry = f.noCarry;
+    if ("remindAt" in patch || "date" in patch) patch.remindSetAt = f.remindAt ? nowStamp() : "";
+    if ("date" in patch) {
+      patch.order = nextOrder(f.date);
+      if (t.recurringId) markSkipped(t.recurringId, t.date); // the repeat won't re-add it on the old day
+    }
+    if (Object.keys(patch).length) updateTask(t.id, patch);
+    return patch;
+  }
+
+  function finishEdit(msg, f) {
+    closeModal();
+    render();
+    refreshReminders();
+    if (f.remindAt && f.remindAt !== "") afterReminderSaved(f.date, f.remindAt);
+    else toast(msg);
+  }
+
+  function saveEdit(t, rule) {
+    const f = readEditForm(t);
+    if (!f.title) { document.getElementById("edTitle").focus(); return; }
+    if (f.repeat.type === "weekly" && !f.repeat.weekdays.length) { toast("Choose at least one day of the week."); return; }
+    const remindChanged = f.remindAt !== (t.remindAt || "");
+
+    if (!rule) {
+      applyThisTask(t, f);
+      if (f.repeat.type !== "none") {
+        const r = {
+          id: uid(), title: f.title, categoryId: f.categoryId, priority: f.priority, time: f.time, remindAt: f.remindAt,
+          type: f.repeat.type, weekdays: f.repeat.weekdays, monthDay: f.repeat.monthDay, enabled: true,
+          startDate: f.date, createdAt: nowStamp(), updatedAt: nowStamp()
+        };
+        state.recurring.push(r);
+        t.recurringId = r.id;
+        delete t.noCarry;
+        touch(t);
+        persist();
+        finishEdit("Saved. This task now repeats: " + scheduleLabel(r) + ".", { date: f.date, remindAt: remindChanged ? f.remindAt : "" });
+        return;
+      }
+      finishEdit("Changes saved.", { date: f.date, remindAt: remindChanged ? f.remindAt : "" });
+      return;
+    }
+
+    const repeatChanged = f.repeat.type !== rule.type ||
+      (f.repeat.type === "weekly" && f.repeat.weekdays.slice().sort().join() !== (rule.weekdays || []).slice().sort().join()) ||
+      (f.repeat.type === "monthly" && f.repeat.monthDay !== Number(rule.monthDay || 1));
+    const seriesChanged = SERIES_FIELDS.some(function (k) { return (t[k] || "") !== (f[k] || ""); });
+    if (!repeatChanged && !seriesChanged) {
+      applyThisTask(t, f);
+      finishEdit("Changes saved.", { date: f.date, remindAt: "" });
+      return;
+    }
+    const allLabel = f.repeat.type === "none" ? "Stop repeating from this day on" : "This and all future days";
+    openModal("Change which days?",
+      '<p>This is a repeating task (' + escapeHtml(scheduleLabel(rule)) + ').</p>' +
+      (repeatChanged ? '<p class="hint">You changed how it repeats, so this change applies to this day and all future days.</p>'
+                     : '<p class="hint">Change only this day\'s task, or this one and every future day?</p>'),
+      [
+        repeatChanged ? null : { label: "Just this day", cls: "primary", onClick: function () {
+          applyThisTask(t, f);
+          finishEdit("Saved for this day only.", { date: f.date, remindAt: remindChanged ? f.remindAt : "" });
+        }},
+        { label: allLabel, cls: repeatChanged ? "primary" : "", onClick: function () {
+          applyToSeries(t, rule, f, remindChanged);
+          finishEdit(f.repeat.type === "none" ? "It no longer repeats. Past days are kept." : "Saved for this and all future days.",
+            { date: f.date, remindAt: remindChanged ? f.remindAt : "" });
+        }},
+        { label: "Go back", cls: "ghost", onClick: function () { closeModal(); openEditTask(t.id); } }
+      ].filter(Boolean)
+    );
+  }
+
+  function applyToSeries(t, rule, f, remindChanged) {
+    const from = t.date;
+    if (f.repeat.type === "none") {
+      // Stop the series: keep this task as a one-time task and remove its unfinished future copies.
+      state.recurring = state.recurring.filter(function (r) { return r.id !== rule.id; });
+      addTomb("recurring", rule.id);
+      state.tasks.slice().forEach(function (x) {
+        if (x.recurringId === rule.id && x.id !== t.id && !x.done && x.date > from) {
+          state.tasks = state.tasks.filter(function (y) { return y.id !== x.id; });
+          addTomb("tasks", x.id);
+        }
+      });
+      applyThisTask(t, f);
+      t.recurringId = null;
+      touch(t);
+      persist();
+      return;
+    }
+    Object.assign(rule, {
+      title: f.title, categoryId: f.categoryId, priority: f.priority, time: f.time, remindAt: f.remindAt,
+      type: f.repeat.type, weekdays: f.repeat.weekdays, monthDay: f.repeat.monthDay
+    });
+    touch(rule);
+    applyThisTask(t, f);
+    state.tasks.slice().forEach(function (x) {
+      if (x.recurringId !== rule.id || x.id === t.id || x.done || x.date <= from) return;
+      if (!matchesRecurring(rule, x.date)) {
+        state.tasks = state.tasks.filter(function (y) { return y.id !== x.id; });
+        addTomb("tasks", x.id);
+        return;
+      }
+      SERIES_FIELDS.forEach(function (k) { x[k] = f[k]; });
+      if (remindChanged) x.remindSetAt = f.remindAt ? nowStamp() : "";
+      touch(x);
+    });
+    persist();
+    ensureInstancesForDate(viewDate);
+  }
+
+  function confirmDelete(t, rule) {
+    if (!rule) { closeModal(); deleteTask(t.id, false); render(); refreshReminders(); return; }
+    openModal("Delete which days?",
+      '<p>“' + escapeHtml(t.title) + '” repeats (' + escapeHtml(scheduleLabel(rule)) + ").</p>" +
+      '<p class="hint">Past days stay in your history either way.</p>',
+      [
+        { label: "Just this day", cls: "danger", onClick: function () { closeModal(); deleteTask(t.id, true); render(); refreshReminders(); } },
+        { label: "This and all future days", cls: "danger", onClick: function () {
+          if (!confirm("Stop this repeating task and delete it from this day on?")) return;
+          const from = t.date;
+          state.recurring = state.recurring.filter(function (r) { return r.id !== rule.id; });
+          addTomb("recurring", rule.id);
+          state.tasks.slice().forEach(function (x) {
+            if (x.recurringId === rule.id && !x.done && x.date >= from) {
+              state.tasks = state.tasks.filter(function (y) { return y.id !== x.id; });
+              addTomb("tasks", x.id);
+            }
+          });
+          persist();
+          closeModal();
+          render();
+          refreshReminders();
+          toast("Repeating task stopped and removed from this day on.");
+        }},
+        { label: "Go back", cls: "ghost", onClick: function () { closeModal(); openEditTask(t.id); } }
+      ]
     );
   }
 

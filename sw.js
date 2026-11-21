@@ -1,4 +1,4 @@
-const C = 'journal-v4';
+const C = 'journal-v5';
 const REM_CACHE = 'dj-reminders';
 const F = [
   './',
